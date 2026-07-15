@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="ProfileMigration.DAL/ProfileMigration.DAL.csproj" />
+  <Project Path="ProfileMigration/ProfileMigration.App.csproj" />
+</Solution>
