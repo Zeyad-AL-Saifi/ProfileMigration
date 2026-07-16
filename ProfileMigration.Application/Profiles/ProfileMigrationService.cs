@@ -81,9 +81,10 @@ public sealed class ProfileMigrationService(
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var h = loaded.ClientHeaders;
-        int sourceRows = 0, missingIdNum = 0, alreadyInDb = 0, unmappedBranch = 0, withAddress = 0;
+        int sourceRows = 0, missingIdNum = 0, missingCombinedNumber = 0, alreadyInDb = 0, unmappedBranch = 0, withAddress = 0;
         var groupCounts = new Dictionary<(string IdNum, int IdType), int>();
         var missingIdSamples = new List<string>();
+        var missingCombinedSamples = new List<string>();
         var alreadyInDbSamples = new List<string>();
         var unmappedBranchSamples = new List<string>();
 
@@ -108,6 +109,15 @@ public sealed class ProfileMigrationService(
                 missingIdNum++;
                 if (missingIdSamples.Count < SampleLimit)
                     missingIdSamples.Add($"Row {r} CLIENT_ID={clientId}");
+                continue;
+            }
+
+            long? combinedNumber = GetLong(row, h, "Combined Number");
+            if (combinedNumber is null || combinedNumber <= 0)
+            {
+                missingCombinedNumber++;
+                if (missingCombinedSamples.Count < SampleLimit)
+                    missingCombinedSamples.Add($"Row {r} CLIENT_ID={clientId}");
                 continue;
             }
 
@@ -140,10 +150,11 @@ public sealed class ProfileMigrationService(
 
         report.Stats["eligibleSourceRows"] = sourceRows;
         report.Stats["missingIdNum"] = missingIdNum;
+        report.Stats["missingCombinedNumber"] = missingCombinedNumber;
         report.Stats["alreadyInDb"] = alreadyInDb;
         report.Stats["existingIdNumsInDb"] = existingIdNums.Count;
         report.Stats["willInsert"] = willInsert;
-        report.Stats["willSkip"] = missingIdNum + alreadyInDb
+        report.Stats["willSkip"] = missingIdNum + missingCombinedNumber + alreadyInDb
             + eligibility.SkippedMissingIdCard
             + eligibility.SkippedInternalDuplicates
             + eligibility.SkippedCrossCompanyMatches;
@@ -155,6 +166,8 @@ public sealed class ProfileMigrationService(
 
         ReportBuilder.AddIssue(report, "Warning", "MISSING_ID_NUM",
             "Eligible rows without an ID number (required merge key) — will be skipped.", missingIdNum, missingIdSamples);
+        ReportBuilder.AddIssue(report, "Warning", "MISSING_COMBINED_NUMBER",
+            "Eligible rows without Combined Number (required CUST_ID) — will be skipped.", missingCombinedNumber, missingCombinedSamples);
         ReportBuilder.AddIssue(report, "Info", "ALREADY_IN_DB",
             "Rows whose ID number already exists in PROFILES_TB — will be skipped.", alreadyInDb, alreadyInDbSamples);
         ReportBuilder.AddIssue(report, "Warning", "UNMAPPED_BRANCH",

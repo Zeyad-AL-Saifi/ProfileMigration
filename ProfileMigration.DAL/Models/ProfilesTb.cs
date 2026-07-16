@@ -25,7 +25,7 @@ public partial class ProfilesTb
     /// رقم العميل
     /// SERIAL
     /// </summary>
-    public int? CustId { get; set; }
+    public long? CustId { get; set; }
 
     /// <summary>
     /// نوع وثيقة التعريف

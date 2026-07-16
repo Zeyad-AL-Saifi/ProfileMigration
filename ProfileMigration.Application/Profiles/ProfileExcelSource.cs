@@ -153,7 +153,7 @@ public static class ProfileExcelSource
     {
         var errors = new List<ValidationError>();
         ValidateSource(clientWb, "clients", ClientSheet, ClientHeaderRow,
-            ["CLIENT_ID", "COMPANY", "NAME1"], errors);
+            ["CLIENT_ID", "COMPANY", "NAME1", "Combined Number"], errors);
         ValidateSource(idCardWb, "idCards", IdCardSheet, IdCardHeaderRow,
             ["CLIENT_ID", "COMPANY", "ID_CARD_TYPE", "ID_CARD_NO"], errors);
         ValidateSource(addressWb, "addresses", AddressSheet, AddressHeaderRow,
@@ -271,7 +271,10 @@ public static class ProfileExcelSource
             if (oldBrCode.HasValue && loaded.BranchMap.TryGetValue((company, oldBrCode.Value), out int foundId))
                 newBranchId = foundId;
 
-            var profile = MapProfile(row, h, idCard, 0, clientId.Value, newBranchId);
+            var custId = GetLong(row, h, "Combined Number");
+            if (custId is null || custId <= 0) continue;
+
+            var profile = MapProfile(row, h, idCard, 0, custId, newBranchId);
             loaded.Addresses.TryGetValue((company, clientId.Value), out AddressData? address);
             ApplyAddress(profile, address);
             var phones = address?.Phones ?? Array.Empty<string>();
@@ -447,7 +450,7 @@ public static class ProfileExcelSource
 
     public static ProfilesTb MapProfile(
         IXLRow row, Dictionary<string, int> h,
-        IdCardData? idCard, int profileId, int custId, int branchId)
+        IdCardData? idCard, int profileId, long? custId, int branchId)
     {
         string? englishName1 = GetString(row, h, "NAME1");
         string? englishName2 = GetString(row, h, "NAME2");

@@ -25,12 +25,28 @@ public static class ExcelHelpers
         return GetCellInt(row.Cell(c));
     }
 
+    public static long? GetLong(IXLRow row, Dictionary<string, int> h, string col)
+    {
+        if (!h.TryGetValue(col, out int c)) return null;
+        return GetCellLong(row.Cell(c));
+    }
+
     public static int? GetCellInt(IXLCell cell)
     {
+        var value = GetCellLong(cell);
+        if (value is null) return null;
+        if (value < int.MinValue || value > int.MaxValue) return null;
+        return (int)value.Value;
+    }
+
+    public static long? GetCellLong(IXLCell cell)
+    {
         if (cell.IsEmpty()) return null;
-        if (cell.TryGetValue(out long l)) return (int)l;
-        if (cell.TryGetValue(out double d)) return Convert.ToInt32(d);
-        return null;
+        if (cell.TryGetValue(out long l)) return l;
+        if (cell.TryGetValue(out double d)) return Convert.ToInt64(d);
+        var text = cell.GetString().Trim();
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        return long.TryParse(text, out long parsed) ? parsed : null;
     }
 
     public static string? GetString(IXLRow row, Dictionary<string, int> h, string col)

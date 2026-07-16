@@ -69,7 +69,7 @@ public sealed class ProfileExcelSourceTests
         Assert.True(loaded.Addresses.ContainsKey(("ASALA", 101)));
         Assert.True(eligibility.IsEligible("ASALA", 101));
         Assert.Equal("ABC123", group.IdNum);
-        Assert.Equal(101, group.Profile.CustId);
+        Assert.Equal(611300001906L, group.Profile.CustId);
         Assert.Equal("عينة", group.Profile.FirstNameNa);
         Assert.Equal("Sample", group.Profile.FirstNameFo);
         Assert.Equal("عينة اسم عربي عائلة", group.Profile.ProfileNameNa);
@@ -94,7 +94,7 @@ public sealed class ProfileExcelSourceTests
         var profile = new ProfilesTb
         {
             ProfileId = 10,
-            CustId = 10,
+            CustId = 611300001906L,
             BranchId = 6,
             ProfileNameNa = "اسم تجريبي",
             ProfileNameFo = "Test Name",
@@ -127,19 +127,20 @@ public sealed class ProfileExcelSourceTests
         var worksheet = workbook.AddWorksheet(ClientSheet);
         SetHeaders(
             worksheet,
-            "CLIENT_ID", "COMPANY",
+            "CLIENT_ID", "COMPANY", "Combined Number",
             "NAME1", "NAME2", "NAME3", "NAME4",
             "ANAME1", "ANAME2", "ANAME3", "ANAME4");
         worksheet.Cell(2, 1).Value = 101;
         worksheet.Cell(2, 2).Value = "ASALA";
-        worksheet.Cell(2, 3).Value = "Sample";
-        worksheet.Cell(2, 4).Value = "English";
-        worksheet.Cell(2, 5).Value = "Test";
-        worksheet.Cell(2, 6).Value = "Family";
-        worksheet.Cell(2, 7).Value = "عينة";
-        worksheet.Cell(2, 8).Value = "اسم";
-        worksheet.Cell(2, 9).Value = "عربي";
-        worksheet.Cell(2, 10).Value = "عائلة";
+        worksheet.Cell(2, 3).Value = 611300001906L;
+        worksheet.Cell(2, 4).Value = "Sample";
+        worksheet.Cell(2, 5).Value = "English";
+        worksheet.Cell(2, 6).Value = "Test";
+        worksheet.Cell(2, 7).Value = "Family";
+        worksheet.Cell(2, 8).Value = "عينة";
+        worksheet.Cell(2, 9).Value = "اسم";
+        worksheet.Cell(2, 10).Value = "عربي";
+        worksheet.Cell(2, 11).Value = "عائلة";
         return workbook;
     }
 

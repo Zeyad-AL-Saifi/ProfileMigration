@@ -825,7 +825,7 @@ public partial class SilaDbContext : DbContext
                 .HasColumnType("DATE")
                 .HasColumnName("CUST_APPROVED_ON");
             entity.Property(e => e.CustId)
-                .HasPrecision(9)
+                .HasPrecision(19)
                 .HasComment("رقم العميل\nSERIAL")
                 .HasColumnName("CUST_ID");
             entity.Property(e => e.CustStatusId)
