@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProfileMigration.Application\ProfileMigration.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\excel\Match MF_CLIENT - Copy (3).xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>Match MF_CLIENT - Copy (3).xlsx</Link>
+    </None>
+    <None Include="..\excel\March MF_CLINT_ID_CARD.xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>March MF_CLINT_ID_CARD.xlsx</Link>
+    </None>
+    <None Include="..\excel\MF_CLIENT_ADDRESSES.xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>MF_CLIENT_ADDRESSES.xlsx</Link>
+    </None>
+    <None Include="..\excel\area 2.xlsx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>area 2.xlsx</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

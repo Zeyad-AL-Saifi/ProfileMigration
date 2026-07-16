@@ -1,4 +1,7 @@
 <Solution>
   <Project Path="ProfileMigration.DAL/ProfileMigration.DAL.csproj" />
+  <Project Path="ProfileMigration.Application/ProfileMigration.Application.csproj" />
+  <Project Path="ProfileMigration.Api/ProfileMigration.Api.csproj" />
   <Project Path="ProfileMigration/ProfileMigration.App.csproj" />
+  <Project Path="ProfileMigration.Tests/ProfileMigration.Tests.csproj" />
 </Solution>
