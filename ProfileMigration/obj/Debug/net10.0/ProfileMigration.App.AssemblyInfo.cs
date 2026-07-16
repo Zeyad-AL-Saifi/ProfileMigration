@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ProfileMigration.App")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6e9d3ebf4789967b152438a29b93d2b24ef5f25d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1b954c1d9fd45b7f12241be7bd5403be80d028f3")]
 [assembly: System.Reflection.AssemblyProductAttribute("ProfileMigration.App")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ProfileMigration.App")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
