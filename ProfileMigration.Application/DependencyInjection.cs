@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using ProfileMigration.Application.Analysis;
 using ProfileMigration.Application.Areas;
 using ProfileMigration.Application.Branches;
 using ProfileMigration.Application.Constants;
@@ -59,6 +60,7 @@ public static class DependencyInjection
         services.AddScoped<BankMigrationService>();
         services.AddScoped<PartnerMigrationService>();
         services.AddScoped<ContactMigrationService>();
+        services.AddScoped<ClientAnalysisService>();
 
         return services;
     }

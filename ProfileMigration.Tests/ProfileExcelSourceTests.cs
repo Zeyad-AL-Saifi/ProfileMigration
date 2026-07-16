@@ -62,22 +62,22 @@ public sealed class ProfileExcelSourceTests
 
         using var loaded = Open(files.ClientPath, files.IdCardPath, files.AddressPath);
         var eligibility = BuildEligibility(loaded);
-        var group = Assert.Single(BuildMergedGroups(loaded, eligibility: eligibility));
+        var source = Assert.Single(BuildEligibleRows(loaded, eligibility: eligibility));
 
         Assert.Equal(2, loaded.FirstClientDataRow);
         Assert.True(loaded.IdCards.ContainsKey(("ASALA", 101)));
         Assert.True(loaded.Addresses.ContainsKey(("ASALA", 101)));
         Assert.True(eligibility.IsEligible("ASALA", 101));
-        Assert.Equal("ABC123", group.IdNum);
-        Assert.Equal(611300001906L, group.Profile.CustId);
-        Assert.Equal("عينة", group.Profile.FirstNameNa);
-        Assert.Equal("Sample", group.Profile.FirstNameFo);
-        Assert.Equal("عينة اسم عربي عائلة", group.Profile.ProfileNameNa);
-        Assert.Equal("Sample English Test Family", group.Profile.ProfileNameFo);
-        Assert.Equal("عينة اسم عربي عائلة", group.Profile.ProfileNameFNa);
-        Assert.Equal("Sample English Test Family", group.Profile.ProfileNameFFo);
-        Assert.Equal("Street 1 Home", group.Profile.PermanentAddress);
-        Assert.Equal(["0790000000"], group.Phones);
+        Assert.Equal("ABC123", source.IdNum);
+        Assert.Equal(611300001906L, source.Profile.CustId);
+        Assert.Equal("عينة", source.Profile.FirstNameNa);
+        Assert.Equal("Sample", source.Profile.FirstNameFo);
+        Assert.Equal("عينة اسم عربي عائلة", source.Profile.ProfileNameNa);
+        Assert.Equal("Sample English Test Family", source.Profile.ProfileNameFo);
+        Assert.Equal("عينة اسم عربي عائلة", source.Profile.ProfileNameFNa);
+        Assert.Equal("Sample English Test Family", source.Profile.ProfileNameFFo);
+        Assert.Equal("Street 1 Home", source.Profile.PermanentAddress);
+        Assert.Equal(["0790000000"], source.Phones);
     }
 
     [Fact]

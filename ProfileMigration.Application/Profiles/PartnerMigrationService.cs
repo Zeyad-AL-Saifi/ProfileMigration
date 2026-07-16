@@ -8,7 +8,7 @@ using static ProfileMigration.Application.Profiles.ProfileExcelSource;
 
 namespace ProfileMigration.Application.Profiles;
 
-/// <summary>PROFILES_PARTNERS_TB — requires profiles already migrated (matched by IdNum).</summary>
+/// <summary>PROFILES_PARTNERS_TB — requires profiles already migrated (matched by ID number and type).</summary>
 public sealed class PartnerMigrationService(
     DbContextOptions<SilaDbContext> dbOptions,
     IOracleConnectionFactory connectionFactory,
@@ -35,13 +35,17 @@ public sealed class PartnerMigrationService(
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
         var log = new List<string>();
-        var groups = BuildMergedGroups(loaded, log).Where(g => !g.HighConflict).ToList();
+        var eligibility = BuildEligibility(loaded);
+        EligibilityReportBuilder.Apply(report, eligibility);
+        var rows = BuildEligibleRows(loaded, log, eligibility);
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
-        var profileByIdNum = (await conn.QueryAsync<(int ProfileId, string IdNum)>(
-                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
-            .GroupBy(x => x.IdNum, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().ProfileId, StringComparer.OrdinalIgnoreCase);
+        var profileByIdentity = (await conn.QueryAsync<(int ProfileId, string IdNum, int IdType)>(
+                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
+            .ToDictionary(
+                x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType),
+                x => x.ProfileId,
+                StringComparer.Ordinal);
 
         var existingPartnerProfiles = (await conn.QueryAsync<int>(
                 "SELECT DISTINCT PROFILE_ID FROM RHODES_BANKING_SILA.PROFILES_PARTNERS_TB"))
@@ -51,7 +55,7 @@ public sealed class PartnerMigrationService(
         var notFoundSamples = new List<string>();
         var alreadySamples = new List<string>();
 
-        foreach (var g in groups)
+        foreach (var g in rows)
         {
             if (g.Partner is null)
             {
@@ -59,7 +63,8 @@ public sealed class PartnerMigrationService(
                 continue;
             }
 
-            if (!profileByIdNum.TryGetValue(g.IdNum, out int profileId))
+            if (!profileByIdentity.TryGetValue(
+                    ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
                 profileNotFound++;
                 if (notFoundSamples.Count < SampleLimit)
@@ -78,20 +83,20 @@ public sealed class PartnerMigrationService(
             willInsert++;
         }
 
-        report.Stats["mergedGroups"] = groups.Count;
+        report.Stats["eligibleRows"] = rows.Count;
         report.Stats["willInsert"] = willInsert;
         report.Stats["alreadyHasPartner"] = alreadyHasPartner;
         report.Stats["profileNotFound"] = profileNotFound;
         report.Stats["noPartnerData"] = noPartnerData;
         report.Stats["partnerSkippedMissingId"] = log.Count(l => l.Contains("SKIP PARTNER", StringComparison.Ordinal));
-        report.Stats["profilesInDb"] = profileByIdNum.Count;
+        report.Stats["profilesInDb"] = profileByIdentity.Count;
 
         ReportBuilder.AddIssue(report, "Warning", "PROFILE_NOT_FOUND",
             "Partner rows whose IdNum has no matching PROFILES_TB row — run profiles first.", profileNotFound, notFoundSamples);
         ReportBuilder.AddIssue(report, "Info", "ALREADY_HAS_PARTNER",
             "Profiles that already have a partner — will be skipped.", alreadyHasPartner, alreadySamples);
         ReportBuilder.AddIssue(report, "Info", "NO_PARTNER_DATA",
-            "Merged groups with no partner (missing name or national id) — nothing to insert.", noPartnerData);
+            "Eligible rows with no partner (missing name or national id) — nothing to insert.", noPartnerData);
 
         return report;
     }
@@ -102,9 +107,9 @@ public sealed class PartnerMigrationService(
         var log = new List<string>();
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
-        var groups = BuildMergedGroups(loaded, log).Where(g => !g.HighConflict && g.Partner is not null).ToList();
+        var rows = BuildEligibleRows(loaded, log).Where(g => g.Partner is not null).ToList();
 
-        Dictionary<string, int> profileByIdNum;
+        Dictionary<string, int> profileByIdentity;
         HashSet<int> existingPartnerProfiles;
         int nextPartnerId;
 
@@ -112,20 +117,23 @@ public sealed class PartnerMigrationService(
         {
             nextPartnerId = ((await ctx.ProfilesPartnersTbs.Select(p => (int?)p.PartnerId).MaxAsync(ct)) ?? -1) + 1;
             existingPartnerProfiles = (await ctx.ProfilesPartnersTbs.Select(p => p.ProfileId).Distinct().ToListAsync(ct)).ToHashSet();
-            profileByIdNum = (await ctx.ProfilesTbs
+            profileByIdentity = (await ctx.ProfilesTbs
                     .Where(p => p.IdNum != null)
-                    .Select(p => new { p.ProfileId, p.IdNum })
+                    .Select(p => new { p.ProfileId, p.IdNum, p.IdTypeId })
                     .ToListAsync(ct))
-                .GroupBy(x => x.IdNum!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First().ProfileId, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(
+                    x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum!, x.IdTypeId ?? 1),
+                    x => x.ProfileId,
+                    StringComparer.Ordinal);
         }
 
         var batch = new List<ProfilesPartnersTb>(MigrationBatchInserter.BatchSize);
         int inserted = 0, skipped = 0, profileNotFound = 0, alreadyHas = 0, insertFailed = 0;
 
-        foreach (var g in groups)
+        foreach (var g in rows)
         {
-            if (!profileByIdNum.TryGetValue(g.IdNum, out int profileId))
+            if (!profileByIdentity.TryGetValue(
+                    ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
                 profileNotFound++;
                 skipped++;

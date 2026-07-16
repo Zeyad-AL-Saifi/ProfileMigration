@@ -69,20 +69,25 @@ public sealed class ProfileMigrationService(
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
         var eligibility = BuildEligibility(loaded);
-        ApplyEligibilityStats(report, eligibility);
+        EligibilityReportBuilder.Apply(report, eligibility);
 
         var addressLookup = loaded.Addresses;
         var branchLookup = loaded.BranchMap;
         int unmappedCity = loaded.UnmappedCityCount;
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
-        var existingIdNums = (await conn.QueryAsync<string>(
-            "SELECT ID_NUM FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingIdentities = (await conn.QueryAsync<(string IdNum, int IdType)>(
+            """
+            SELECT ID_NUM AS IdNum, ID_TYPE_ID AS IdType
+            FROM RHODES_BANKING_SILA.PROFILES_TB
+            WHERE ID_NUM IS NOT NULL
+            """))
+            .Select(x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType))
+            .ToHashSet(StringComparer.Ordinal);
 
         var h = loaded.ClientHeaders;
         int sourceRows = 0, missingIdNum = 0, missingCombinedNumber = 0, alreadyInDb = 0, unmappedBranch = 0, withAddress = 0;
-        var groupCounts = new Dictionary<(string IdNum, int IdType), int>();
+        int willInsert = 0;
         var missingIdSamples = new List<string>();
         var missingCombinedSamples = new List<string>();
         var alreadyInDbSamples = new List<string>();
@@ -122,7 +127,7 @@ public sealed class ProfileMigrationService(
             }
 
             idNum = idNum.Trim();
-            if (existingIdNums.Contains(idNum))
+            if (existingIdentities.Contains(ClientEligibilityClassifier.BuildDbIdentityKey(idNum, idType)))
             {
                 alreadyInDb++;
                 if (alreadyInDbSamples.Count < SampleLimit)
@@ -141,25 +146,20 @@ public sealed class ProfileMigrationService(
             if (addressLookup.ContainsKey((company, clientId.Value)))
                 withAddress++;
 
-            var key = (idNum, idType);
-            groupCounts[key] = groupCounts.TryGetValue(key, out int cnt) ? cnt + 1 : 1;
+            willInsert++;
         }
-
-        int willInsert = groupCounts.Count;
-        int multiRowGroups = groupCounts.Count(g => g.Value > 1);
 
         report.Stats["eligibleSourceRows"] = sourceRows;
         report.Stats["missingIdNum"] = missingIdNum;
         report.Stats["missingCombinedNumber"] = missingCombinedNumber;
         report.Stats["alreadyInDb"] = alreadyInDb;
-        report.Stats["existingIdNumsInDb"] = existingIdNums.Count;
+        report.Stats["existingIdentitiesInDb"] = existingIdentities.Count;
         report.Stats["willInsert"] = willInsert;
         report.Stats["willSkip"] = missingIdNum + missingCombinedNumber + alreadyInDb
             + eligibility.SkippedMissingIdCard
             + eligibility.SkippedInternalDuplicates
-            + eligibility.SkippedCrossCompanyMatches;
-        report.Stats["willMerge"] = multiRowGroups;
-        report.Stats["multiRowGroups"] = multiRowGroups;
+            + eligibility.SkippedCrossCompanyMatches
+            + eligibility.SkippedDuplicateIdNums;
         report.Stats["unmappedBranch"] = unmappedBranch;
         report.Stats["unmappedCity"] = unmappedCity;
         report.Stats["withAddress"] = withAddress;
@@ -169,14 +169,11 @@ public sealed class ProfileMigrationService(
         ReportBuilder.AddIssue(report, "Warning", "MISSING_COMBINED_NUMBER",
             "Eligible rows without Combined Number (required CUST_ID) — will be skipped.", missingCombinedNumber, missingCombinedSamples);
         ReportBuilder.AddIssue(report, "Info", "ALREADY_IN_DB",
-            "Rows whose ID number already exists in PROFILES_TB — will be skipped.", alreadyInDb, alreadyInDbSamples);
+            "Rows whose ID number and ID type already exist in PROFILES_TB — will be skipped.", alreadyInDb, alreadyInDbSamples);
         ReportBuilder.AddIssue(report, "Warning", "UNMAPPED_BRANCH",
             $"Rows with an unmapped COMPANY_BRANCH_CODE — will default to BranchId={DefaultBranchId}.", unmappedBranch, unmappedBranchSamples);
         ReportBuilder.AddIssue(report, "Warning", "UNMAPPED_CITY",
             "Address rows with an unmapped CITY_CODE (e.g. Asala 100+) — PermanentStateId left null.", unmappedCity);
-        ReportBuilder.AddIssue(report, "Info", "MULTI_ROW_MERGE_CANDIDATES",
-            "ID numbers appearing in more than one source row — will be merged into a single profile.", multiRowGroups);
-
         return report;
     }
 
@@ -200,46 +197,36 @@ public sealed class ProfileMigrationService(
         log.Add(
             $"[ELIGIBILITY] total={eligibility.TotalInput} eligible={eligibility.EligibleCount} " +
             $"missingCard={eligibility.SkippedMissingIdCard} internalDup={eligibility.SkippedInternalDuplicates} " +
-            $"crossCompany={eligibility.SkippedCrossCompanyMatches}");
+            $"crossCompany={eligibility.SkippedCrossCompanyMatches} duplicateIdNum={eligibility.SkippedDuplicateIdNums}");
 
-        var groups = BuildMergedGroups(loaded, log, eligibility);
+        var rows = BuildEligibleRows(loaded, log, eligibility);
         logger.LogInformation(
-            "Profile classification and merge completed in {ElapsedMs} ms. Eligible: {Eligible}, groups: {Groups}",
+            "Profile classification completed in {ElapsedMs} ms. Eligible: {Eligible}, rows: {Rows}",
             stageTimer.ElapsedMilliseconds,
             eligibility.EligibleCount,
-            groups.Count);
+            rows.Count);
 
         int nextProfileId;
-        var seenIdNums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIdentities = new HashSet<string>(StringComparer.Ordinal);
 
         stageTimer.Restart();
         await using (var seqCtx = new SilaDbContext(dbOptions))
         {
             nextProfileId = ((await seqCtx.ProfilesTbs.Select(p => (int?)p.ProfileId).MaxAsync(ct)) ?? -1) + 1;
-            var existingIdNums = await seqCtx.ProfilesTbs
+            var existingIdentities = await seqCtx.ProfilesTbs
                 .Where(p => p.IdNum != null)
-                .Select(p => p.IdNum!)
+                .Select(p => new { p.IdNum, p.IdTypeId })
                 .ToListAsync(ct);
-            foreach (var n in existingIdNums) seenIdNums.Add(n);
+            foreach (var identity in existingIdentities)
+                seenIdentities.Add(ClientEligibilityClassifier.BuildDbIdentityKey(
+                    identity.IdNum!, identity.IdTypeId ?? 1));
         }
         logger.LogInformation(
             "Existing profile keys loaded in {ElapsedMs} ms. Existing IDs: {ExistingIds}",
             stageTimer.ElapsedMilliseconds,
-            seenIdNums.Count);
+            seenIdentities.Count);
 
-        string conflictFile = Path.Combine(AppContext.BaseDirectory, "merge_conflicts.txt");
-        await using var conflictWriter = new StreamWriter(conflictFile, append: false);
-        await conflictWriter.WriteLineAsync($"Merge review — generated {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        await conflictWriter.WriteLineAsync("Rows listed here were NOT inserted and need manual handling.");
-        await conflictWriter.WriteLineAsync();
-        int reviewCount = 0, missingIdNumCount = 0, alreadyInDbCount = 0;
-
-        foreach (var (key, reason) in eligibility.Skipped.OrderBy(x => x.Key.Company).ThenBy(x => x.Key.ClientId))
-        {
-            await conflictWriter.WriteLineAsync($"SKIPPED {reason}: {key.Company} CLIENT_ID={key.ClientId}");
-            await conflictWriter.WriteLineAsync();
-            reviewCount++;
-        }
+        int missingIdNumCount = 0, alreadyInDbCount = 0;
 
         var h = loaded.ClientHeaders;
         for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
@@ -254,52 +241,34 @@ public sealed class ProfileMigrationService(
             string? idNum = idCard?.IdNum ?? GetString(row, h, "NATIONAL_ID");
             if (string.IsNullOrWhiteSpace(idNum))
             {
-                await conflictWriter.WriteLineAsync(
-                    $"Row {r} (CLIENT_ID={clientId}): missing ID_NUM — required key, not inserted.");
-                await conflictWriter.WriteLineAsync();
-                reviewCount++;
                 missingIdNumCount++;
             }
         }
 
         var batch = new List<ProfilesTb>(MigrationBatchInserter.BatchSize);
-        int inserted = 0, highConflict = 0, insertFailed = 0;
-        int processedGroups = 0;
+        int inserted = 0, insertFailed = 0;
+        int processedRows = 0;
         int skipped = missingIdNumCount
             + eligibility.SkippedMissingIdCard
             + eligibility.SkippedInternalDuplicates
-            + eligibility.SkippedCrossCompanyMatches;
+            + eligibility.SkippedCrossCompanyMatches
+            + eligibility.SkippedDuplicateIdNums;
 
-        foreach (var g in groups)
+        foreach (var source in rows)
         {
-            processedGroups++;
-            if (seenIdNums.Contains(g.IdNum))
+            processedRows++;
+            string identityKey = ClientEligibilityClassifier.BuildDbIdentityKey(source.IdNum, source.IdType);
+            if (seenIdentities.Contains(identityKey))
             {
                 alreadyInDbCount++;
                 skipped++;
                 continue;
             }
 
-            if (g.HighConflict)
-            {
-                await conflictWriter.WriteLineAsync(
-                    $"ID_NUM={g.IdNum} ID_TYPE={g.IdType}: {g.Conflicts.Count} conflicting fields (> {MaxConflicts}) — NOT inserted.");
-                foreach (var conflict in g.Conflicts)
-                    await conflictWriter.WriteLineAsync($"    {conflict}");
-                await conflictWriter.WriteLineAsync();
-                reviewCount++;
-                highConflict++;
-                skipped += g.SourceRowCount;
-                continue;
-            }
-
-            if (g.WasMerged)
-                log.Add($"[MERGE] ID_NUM={g.IdNum} ID_TYPE={g.IdType} rows={g.SourceRowCount} conflicts={g.Conflicts.Count}");
-
-            g.Profile.ProfileId = nextProfileId;
+            source.Profile.ProfileId = nextProfileId;
             nextProfileId++;
-            seenIdNums.Add(g.IdNum);
-            batch.Add(g.Profile);
+            seenIdentities.Add(identityKey);
+            batch.Add(source.Profile);
 
             if (batch.Count >= MigrationBatchInserter.BatchSize)
             {
@@ -310,9 +279,9 @@ public sealed class ProfileMigrationService(
                 insertFailed += batch.Count - ok;
                 batch.Clear();
                 logger.LogInformation(
-                    "Profile migration progress: {Processed}/{Total} groups, {Inserted} inserted, {Failed} failed. Last batch {BatchCount} rows in {ElapsedMs} ms",
-                    processedGroups,
-                    groups.Count,
+                    "Profile migration progress: {Processed}/{Total} rows, {Inserted} inserted, {Failed} failed. Last batch {BatchCount} rows in {ElapsedMs} ms",
+                    processedRows,
+                    rows.Count,
                     inserted,
                     insertFailed,
                     batchCount,
@@ -335,9 +304,7 @@ public sealed class ProfileMigrationService(
         }
 
         skipped += alreadyInDbCount;
-        log.Add($"Inserted={inserted} Skipped={skipped} HighConflict={highConflict} InsertFailed={insertFailed}");
-        if (reviewCount > 0)
-            log.Add($"Review file: {conflictFile} ({reviewCount} entries)");
+        log.Add($"Inserted={inserted} Skipped={skipped} InsertFailed={insertFailed}");
         logger.LogInformation(
             "Profile migration completed in {Elapsed}. Inserted: {Inserted}, skipped: {Skipped}, failed: {Failed}",
             totalTimer.Elapsed,
@@ -349,7 +316,7 @@ public sealed class ProfileMigrationService(
         {
             Phase = "profiles",
             Success = true,
-            Message = $"Profiles: {inserted} inserted, {skipped} skipped ({highConflict} high-conflict), {insertFailed} rejected by DB.",
+            Message = $"Profiles: {inserted} inserted, {skipped} skipped, {insertFailed} rejected by DB.",
             Stats =
             {
                 ["total_input"] = eligibility.TotalInput,
@@ -358,46 +325,15 @@ public sealed class ProfileMigrationService(
                 ["skipped_missing_id_card"] = eligibility.SkippedMissingIdCard,
                 ["skipped_internal_duplicates"] = eligibility.SkippedInternalDuplicates,
                 ["skipped_cross_company_matches"] = eligibility.SkippedCrossCompanyMatches,
+                ["skipped_duplicate_id_nums"] = eligibility.SkippedDuplicateIdNums,
                 ["inserted"] = inserted,
                 ["skipped"] = skipped,
-                ["highConflict"] = highConflict,
                 ["insertFailed"] = insertFailed,
                 ["alreadyInDb"] = alreadyInDbCount,
                 ["missingIdNum"] = missingIdNumCount,
-                ["reviewCount"] = reviewCount,
-                ["mergeConflictsFile"] = conflictFile,
             },
             Log = log,
         };
-    }
-
-    static void ApplyEligibilityStats(MigrationReportDto report, ClientEligibilityClassifier.Result eligibility)
-    {
-        report.Stats["total_input"] = eligibility.TotalInput;
-        report.Stats["eligible_count"] = eligibility.EligibleCount;
-        report.Stats["skipped_missing_id_card"] = eligibility.SkippedMissingIdCard;
-        report.Stats["skipped_internal_duplicates"] = eligibility.SkippedInternalDuplicates;
-        report.Stats["skipped_cross_company_matches"] = eligibility.SkippedCrossCompanyMatches;
-
-        ReportBuilder.AddIssue(report, "Warning", ClientEligibilityClassifier.ReasonMissingIdCard,
-            "Clients without ID_CARD_TYPE+ID_CARD_NO (Analysis join) — never migrated.",
-            eligibility.SkippedMissingIdCard,
-            eligibility.SampleSkipped(ClientEligibilityClassifier.ReasonMissingIdCard));
-
-        ReportBuilder.AddIssue(report, "Warning", ClientEligibilityClassifier.ReasonInternalDuplicateAsala,
-            "ASALA clients sharing the same card_key (2+) — all excluded.",
-            eligibility.Skipped.Count(kv => kv.Value == ClientEligibilityClassifier.ReasonInternalDuplicateAsala),
-            eligibility.SampleSkipped(ClientEligibilityClassifier.ReasonInternalDuplicateAsala));
-
-        ReportBuilder.AddIssue(report, "Warning", ClientEligibilityClassifier.ReasonInternalDuplicateAcad,
-            "ACAD clients sharing the same card_key (2+) — all excluded.",
-            eligibility.Skipped.Count(kv => kv.Value == ClientEligibilityClassifier.ReasonInternalDuplicateAcad),
-            eligibility.SampleSkipped(ClientEligibilityClassifier.ReasonInternalDuplicateAcad));
-
-        ReportBuilder.AddIssue(report, "Warning", ClientEligibilityClassifier.ReasonCrossCompanyMatch,
-            "card_key present in BOTH ASALA and ACAD — all CLIENT_IDs excluded at any match %.",
-            eligibility.SkippedCrossCompanyMatches,
-            eligibility.SampleSkipped(ClientEligibilityClassifier.ReasonCrossCompanyMatch));
     }
 
     async Task<int> FlushProfilesAsync(List<ProfilesTb> batch, List<string> log, CancellationToken ct) =>

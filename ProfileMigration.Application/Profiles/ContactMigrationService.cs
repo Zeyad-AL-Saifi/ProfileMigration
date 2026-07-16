@@ -8,7 +8,7 @@ using static ProfileMigration.Application.Profiles.ProfileExcelSource;
 
 namespace ProfileMigration.Application.Profiles;
 
-/// <summary>PROFILE_CONTACT_DTS_TB (phones) — requires profiles already migrated (matched by IdNum).</summary>
+/// <summary>PROFILE_CONTACT_DTS_TB (phones) — requires profiles already migrated (matched by ID number and type).</summary>
 public sealed class ContactMigrationService(
     DbContextOptions<SilaDbContext> dbOptions,
     IOracleConnectionFactory connectionFactory,
@@ -34,13 +34,17 @@ public sealed class ContactMigrationService(
         }
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
-        var groups = BuildMergedGroups(loaded, []).Where(g => !g.HighConflict).ToList();
+        var eligibility = BuildEligibility(loaded);
+        EligibilityReportBuilder.Apply(report, eligibility);
+        var rows = BuildEligibleRows(loaded, [], eligibility);
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
-        var profileByIdNum = (await conn.QueryAsync<(int ProfileId, string IdNum)>(
-                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
-            .GroupBy(x => x.IdNum, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().ProfileId, StringComparer.OrdinalIgnoreCase);
+        var profileByIdentity = (await conn.QueryAsync<(int ProfileId, string IdNum, int IdType)>(
+                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
+            .ToDictionary(
+                x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType),
+                x => x.ProfileId,
+                StringComparer.Ordinal);
 
         var existingContacts = (await conn.QueryAsync<(int ProfileId, string ContactInfo)>(
                 """
@@ -54,7 +58,7 @@ public sealed class ContactMigrationService(
         int willInsertPhones = 0, alreadyExists = 0, profileNotFound = 0, noPhoneData = 0;
         var notFoundSamples = new List<string>();
 
-        foreach (var g in groups)
+        foreach (var g in rows)
         {
             if (g.Phones.Count == 0)
             {
@@ -62,7 +66,8 @@ public sealed class ContactMigrationService(
                 continue;
             }
 
-            if (!profileByIdNum.TryGetValue(g.IdNum, out int profileId))
+            if (!profileByIdentity.TryGetValue(
+                    ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
                 profileNotFound++;
                 if (notFoundSamples.Count < SampleLimit)
@@ -79,19 +84,19 @@ public sealed class ContactMigrationService(
             }
         }
 
-        report.Stats["mergedGroups"] = groups.Count;
+        report.Stats["eligibleRows"] = rows.Count;
         report.Stats["willInsert"] = willInsertPhones;
         report.Stats["alreadyExists"] = alreadyExists;
         report.Stats["profileNotFound"] = profileNotFound;
         report.Stats["noPhoneData"] = noPhoneData;
-        report.Stats["profilesInDb"] = profileByIdNum.Count;
+        report.Stats["profilesInDb"] = profileByIdentity.Count;
 
         ReportBuilder.AddIssue(report, "Warning", "PROFILE_NOT_FOUND",
             "Contact rows whose IdNum has no matching PROFILES_TB row — run profiles first.", profileNotFound, notFoundSamples);
         ReportBuilder.AddIssue(report, "Info", "ALREADY_EXISTS",
             "Phone numbers already present for the same profile — will be skipped.", alreadyExists);
         ReportBuilder.AddIssue(report, "Info", "NO_PHONE_DATA",
-            "Merged groups with no TEL_NO / TEL_NO2 / TEL_NO3 — nothing to insert.", noPhoneData);
+            "Eligible rows with no TEL_NO / TEL_NO2 / TEL_NO3 — nothing to insert.", noPhoneData);
 
         return report;
     }
@@ -102,9 +107,9 @@ public sealed class ContactMigrationService(
         var log = new List<string>();
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
-        var groups = BuildMergedGroups(loaded, log).Where(g => !g.HighConflict && g.Phones.Count > 0).ToList();
+        var rows = BuildEligibleRows(loaded, log).Where(g => g.Phones.Count > 0).ToList();
 
-        Dictionary<string, int> profileByIdNum;
+        Dictionary<string, int> profileByIdentity;
         HashSet<(int ProfileId, string ContactInfo)> existingContacts;
         int nextContactId;
 
@@ -117,21 +122,24 @@ public sealed class ContactMigrationService(
                     .ToListAsync(ct))
                 .Select(x => (x.ProfileId, (x.ContactInfo ?? "").Trim()))
                 .ToHashSet();
-            profileByIdNum = (await ctx.ProfilesTbs
+            profileByIdentity = (await ctx.ProfilesTbs
                     .Where(p => p.IdNum != null)
-                    .Select(p => new { p.ProfileId, p.IdNum })
+                    .Select(p => new { p.ProfileId, p.IdNum, p.IdTypeId })
                     .ToListAsync(ct))
-                .GroupBy(x => x.IdNum!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First().ProfileId, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(
+                    x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum!, x.IdTypeId ?? 1),
+                    x => x.ProfileId,
+                    StringComparer.Ordinal);
         }
 
         var batch = new List<ProfileContactDtsTb>(MigrationBatchInserter.BatchSize);
         int inserted = 0, skipped = 0, profileNotFound = 0, alreadyExists = 0, insertFailed = 0;
         var now = DateTime.Now;
 
-        foreach (var g in groups)
+        foreach (var g in rows)
         {
-            if (!profileByIdNum.TryGetValue(g.IdNum, out int profileId))
+            if (!profileByIdentity.TryGetValue(
+                    ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
                 profileNotFound++;
                 skipped += g.Phones.Count;

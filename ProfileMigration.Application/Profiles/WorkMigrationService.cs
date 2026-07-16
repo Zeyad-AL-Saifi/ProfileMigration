@@ -8,7 +8,7 @@ using static ProfileMigration.Application.Profiles.ProfileExcelSource;
 
 namespace ProfileMigration.Application.Profiles;
 
-/// <summary>PROFILE_WORKS_TB — requires profiles already migrated (matched by IdNum).</summary>
+/// <summary>PROFILE_WORKS_TB — requires profiles already migrated (matched by ID number and type).</summary>
 public sealed class WorkMigrationService(
     DbContextOptions<SilaDbContext> dbOptions,
     IOracleConnectionFactory connectionFactory,
@@ -34,15 +34,17 @@ public sealed class WorkMigrationService(
         }
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
-        var allGroups = BuildMergedGroups(loaded, []);
-        int highConflict = allGroups.Count(g => g.HighConflict);
-        var groups = allGroups.Where(g => !g.HighConflict).ToList();
+        var eligibility = BuildEligibility(loaded);
+        EligibilityReportBuilder.Apply(report, eligibility);
+        var rows = BuildEligibleRows(loaded, [], eligibility);
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
-        var profileByIdNum = (await conn.QueryAsync<(int ProfileId, string IdNum)>(
-                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
-            .GroupBy(x => x.IdNum, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().ProfileId, StringComparer.OrdinalIgnoreCase);
+        var profileByIdentity = (await conn.QueryAsync<(int ProfileId, string IdNum, int IdType)>(
+                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
+            .ToDictionary(
+                x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType),
+                x => x.ProfileId,
+                StringComparer.Ordinal);
 
         var existingWorkProfiles = (await conn.QueryAsync<int>(
                 "SELECT DISTINCT PROFILE_ID FROM RHODES_BANKING_SILA.PROFILE_WORKS_TB"))
@@ -52,7 +54,7 @@ public sealed class WorkMigrationService(
         var notFoundSamples = new List<string>();
         var alreadySamples = new List<string>();
 
-        foreach (var g in groups)
+        foreach (var g in rows)
         {
             if (g.Work is null)
             {
@@ -60,7 +62,8 @@ public sealed class WorkMigrationService(
                 continue;
             }
 
-            if (!profileByIdNum.TryGetValue(g.IdNum, out int profileId))
+            if (!profileByIdentity.TryGetValue(
+                    ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
                 profileNotFound++;
                 if (notFoundSamples.Count < SampleLimit)
@@ -79,20 +82,19 @@ public sealed class WorkMigrationService(
             willInsert++;
         }
 
-        report.Stats["mergedGroups"] = groups.Count;
+        report.Stats["eligibleRows"] = rows.Count;
         report.Stats["willInsert"] = willInsert;
         report.Stats["alreadyHasWork"] = alreadyHasWork;
         report.Stats["profileNotFound"] = profileNotFound;
         report.Stats["noWorkData"] = noWorkData;
-        report.Stats["highConflictSkipped"] = highConflict;
-        report.Stats["profilesInDb"] = profileByIdNum.Count;
+        report.Stats["profilesInDb"] = profileByIdentity.Count;
 
         ReportBuilder.AddIssue(report, "Warning", "PROFILE_NOT_FOUND",
             "Work rows whose IdNum has no matching PROFILES_TB row — run profiles first.", profileNotFound, notFoundSamples);
         ReportBuilder.AddIssue(report, "Info", "ALREADY_HAS_WORK",
             "Profiles that already have PROFILE_WORKS_TB — will be skipped.", alreadyHasWork, alreadySamples);
         ReportBuilder.AddIssue(report, "Info", "NO_WORK_DATA",
-            "Merged groups with no WORK_PLACE / PROFESSION / MONTHLY_INCOME — nothing to insert.", noWorkData);
+            "Eligible rows with no WORK_PLACE / PROFESSION / MONTHLY_INCOME — nothing to insert.", noWorkData);
 
         return report;
     }
@@ -103,9 +105,9 @@ public sealed class WorkMigrationService(
         var log = new List<string>();
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
-        var groups = BuildMergedGroups(loaded, log).Where(g => !g.HighConflict && g.Work is not null).ToList();
+        var rows = BuildEligibleRows(loaded, log).Where(g => g.Work is not null).ToList();
 
-        Dictionary<string, int> profileByIdNum;
+        Dictionary<string, int> profileByIdentity;
         HashSet<int> existingWorkProfiles;
         int nextWorkId;
 
@@ -113,20 +115,23 @@ public sealed class WorkMigrationService(
         {
             nextWorkId = ((await ctx.ProfileWorksTbs.Select(w => (int?)w.WorkId).MaxAsync(ct)) ?? -1) + 1;
             existingWorkProfiles = (await ctx.ProfileWorksTbs.Select(w => w.ProfileId).Distinct().ToListAsync(ct)).ToHashSet();
-            profileByIdNum = (await ctx.ProfilesTbs
+            profileByIdentity = (await ctx.ProfilesTbs
                     .Where(p => p.IdNum != null)
-                    .Select(p => new { p.ProfileId, p.IdNum })
+                    .Select(p => new { p.ProfileId, p.IdNum, p.IdTypeId })
                     .ToListAsync(ct))
-                .GroupBy(x => x.IdNum!, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First().ProfileId, StringComparer.OrdinalIgnoreCase);
+                .ToDictionary(
+                    x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum!, x.IdTypeId ?? 1),
+                    x => x.ProfileId,
+                    StringComparer.Ordinal);
         }
 
         var batch = new List<ProfileWorksTb>(MigrationBatchInserter.BatchSize);
         int inserted = 0, skipped = 0, profileNotFound = 0, alreadyHas = 0, insertFailed = 0;
 
-        foreach (var g in groups)
+        foreach (var g in rows)
         {
-            if (!profileByIdNum.TryGetValue(g.IdNum, out int profileId))
+            if (!profileByIdentity.TryGetValue(
+                    ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
                 profileNotFound++;
                 skipped++;

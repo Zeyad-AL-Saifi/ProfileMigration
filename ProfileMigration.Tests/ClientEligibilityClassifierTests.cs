@@ -124,6 +124,55 @@ public class ClientEligibilityClassifierTests
     }
 
     [Fact]
+    public void DuplicateIdNum_WithDifferentCardKeys_ExcludesEveryClient()
+    {
+        var result = Classify(
+        [
+            new ClientIdentityRow("ASALA", 1, "1|CARD-A", "SAME-ID", 1),
+            new ClientIdentityRow("ASALA", 2, "2|CARD-B", "SAME-ID", 1),
+            new ClientIdentityRow("ACAD", 3, "1|UNIQUE", "OTHER-ID", 1),
+        ]);
+
+        Assert.False(result.IsEligible("ASALA", 1));
+        Assert.False(result.IsEligible("ASALA", 2));
+        Assert.True(result.IsEligible("ACAD", 3));
+        Assert.Equal(2, result.SkippedDuplicateIdNums);
+        Assert.Equal(ReasonDuplicateIdNum, result.Skipped[("ASALA", 1)]);
+        Assert.Equal(ReasonDuplicateIdNum, result.Skipped[("ASALA", 2)]);
+    }
+
+    [Fact]
+    public void RepeatedSourceRows_ForSameClient_AreAllExcluded()
+    {
+        var result = Classify(
+        [
+            new ClientIdentityRow("ASALA", 7, "1|REPEATED", "REPEATED", 1),
+            new ClientIdentityRow("ASALA", 7, "1|REPEATED", "REPEATED", 1),
+        ]);
+
+        Assert.Equal(2, result.TotalInput);
+        Assert.Equal(0, result.EligibleCount);
+        Assert.Equal(2, result.SkippedInternalDuplicates);
+        Assert.Equal(ReasonInternalDuplicateAsala, result.Skipped[("ASALA", 7)]);
+    }
+
+    [Fact]
+    public void SameIdNumber_WithDifferentTypes_RemainsDistinct()
+    {
+        var result = Classify(
+        [
+            new ClientIdentityRow("ASALA", 1, "1|SAME", "SAME", 1),
+            new ClientIdentityRow("ASALA", 2, "2|SAME", "SAME", 2),
+        ]);
+
+        Assert.Equal(2, result.EligibleCount);
+        Assert.Equal(0, result.SkippedDuplicateIdNums);
+        Assert.NotEqual(
+            BuildDbIdentityKey("SAME", 1),
+            BuildDbIdentityKey("SAME", 2));
+    }
+
+    [Fact]
     public void IgnoresUnknownCompanies()
     {
         var result = Classify(

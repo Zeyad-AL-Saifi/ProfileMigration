@@ -10,8 +10,14 @@ public static class ClientEligibilityClassifier
     public const string ReasonInternalDuplicateAsala = "INTERNAL_DUPLICATE_ASALA";
     public const string ReasonInternalDuplicateAcad = "INTERNAL_DUPLICATE_ACAD";
     public const string ReasonCrossCompanyMatch = "CROSS_COMPANY_MATCH";
+    public const string ReasonDuplicateIdNum = "DUPLICATE_ID_NUM";
 
-    public sealed record ClientIdentityRow(string Company, int ClientId, string? CardKey);
+    public sealed record ClientIdentityRow(
+        string Company,
+        int ClientId,
+        string? CardKey,
+        string? IdNum = null,
+        int? IdType = null);
 
     public sealed class Result
     {
@@ -23,6 +29,7 @@ public static class ClientEligibilityClassifier
         public int SkippedMissingIdCard { get; init; }
         public int SkippedInternalDuplicates { get; init; }
         public int SkippedCrossCompanyMatches { get; init; }
+        public int SkippedDuplicateIdNums { get; init; }
 
         public bool IsEligible(string company, int clientId) =>
             Eligible.Contains((NormalizeCompany(company), clientId));
@@ -46,6 +53,9 @@ public static class ClientEligibilityClassifier
         return $"{rawIdCardType.Value}|{rawIdCardNo.Trim()}";
     }
 
+    public static string BuildDbIdentityKey(string idNum, int idType) =>
+        $"{idType}|{idNum.Trim().ToUpperInvariant()}";
+
     public static string NormalizeCompany(string? company) =>
         (company ?? "").Trim().ToUpperInvariant();
 
@@ -54,29 +64,42 @@ public static class ClientEligibilityClassifier
 
     public static Result Classify(IEnumerable<ClientIdentityRow> rows)
     {
-        var input = new List<(string Company, int ClientId, string? CardKey)>();
+        var input = new List<(string Company, int ClientId, string? CardKey, string? IdNum, int? IdType)>();
         foreach (var r in rows)
         {
             var company = NormalizeCompany(r.Company);
             if (!IsKnownCompany(company) || r.ClientId <= 0) continue;
-            input.Add((company, r.ClientId, r.CardKey));
+            input.Add((company, r.ClientId, r.CardKey, NormalizeIdNum(r.IdNum), r.IdType));
         }
 
         // Dedupe by (company, clientId) — first wins (same as id-card join keep=first)
-        var unique = new Dictionary<(string, int), string?>();
+        var unique = new Dictionary<(string, int), (string? CardKey, string? IdNum, int? IdType)>();
         foreach (var row in input)
         {
             var key = (row.Company, row.ClientId);
             if (!unique.ContainsKey(key))
-                unique[key] = row.CardKey;
+                unique[key] = (row.CardKey, row.IdNum, row.IdType);
         }
 
         var skipped = new Dictionary<(string Company, int ClientId), string>();
         var missing = 0;
+        int internalDupCount = 0;
 
-        foreach (var (key, cardKey) in unique)
+        // Repeated MF_CLIENT rows for the same client are duplicates too. Mark the
+        // client key once, but count every source record just like the analysis API.
+        foreach (var duplicate in input.GroupBy(x => (x.Company, x.ClientId)).Where(g => g.Count() >= 2))
         {
-            if (string.IsNullOrWhiteSpace(cardKey))
+            var reason = duplicate.Key.Company == "ASALA"
+                ? ReasonInternalDuplicateAsala
+                : ReasonInternalDuplicateAcad;
+            skipped[duplicate.Key] = reason;
+            internalDupCount += duplicate.Count();
+        }
+
+        foreach (var (key, identity) in unique)
+        {
+            if (skipped.ContainsKey(key)) continue;
+            if (string.IsNullOrWhiteSpace(identity.CardKey))
             {
                 skipped[key] = ReasonMissingIdCard;
                 missing++;
@@ -85,8 +108,8 @@ public static class ClientEligibilityClassifier
 
         // Remaining with valid card_key
         var withCard = unique
-            .Where(kv => !skipped.ContainsKey(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
-            .Select(kv => (kv.Key.Item1, kv.Key.Item2, CardKey: kv.Value!))
+            .Where(kv => !skipped.ContainsKey(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value.CardKey))
+            .Select(kv => (kv.Key.Item1, kv.Key.Item2, CardKey: kv.Value.CardKey!))
             .ToList();
 
         // Cross-company: card_key present in BOTH ASALA and ACAD → exclude ALL sides
@@ -111,7 +134,6 @@ public static class ClientEligibilityClassifier
         }
 
         // Internal duplicates within one company (card_key count >= 2)
-        int internalDupCount = 0;
         foreach (var company in new[] { "ASALA", "ACAD" })
         {
             var reason = company == "ASALA" ? ReasonInternalDuplicateAsala : ReasonInternalDuplicateAcad;
@@ -130,6 +152,27 @@ public static class ClientEligibilityClassifier
             }
         }
 
+        // A second identity guard prevents the old merge behavior. If two otherwise
+        // eligible clients resolve to the same DB identity, exclude every source row.
+        // This also catches NATIONAL_ID fallback collisions that card_key cannot see.
+        int duplicateIdNums = 0;
+        var duplicateDbKeys = unique
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value.IdNum))
+            .GroupBy(
+                kv => (IdNum: kv.Value.IdNum!, IdType: kv.Value.IdType ?? 1),
+                new DbIdentityComparer())
+            .Where(g => g.Count() >= 2);
+
+        foreach (var group in duplicateDbKeys)
+        {
+            foreach (var row in group)
+            {
+                if (skipped.ContainsKey(row.Key)) continue;
+                skipped[row.Key] = ReasonDuplicateIdNum;
+                duplicateIdNums++;
+            }
+        }
+
         var eligible = new HashSet<(string Company, int ClientId)>();
         foreach (var key in unique.Keys)
         {
@@ -139,12 +182,26 @@ public static class ClientEligibilityClassifier
 
         return new Result
         {
-            TotalInput = unique.Count,
+            TotalInput = input.Count,
             Eligible = eligible,
             Skipped = skipped,
             SkippedMissingIdCard = missing,
             SkippedInternalDuplicates = internalDupCount,
             SkippedCrossCompanyMatches = cross,
+            SkippedDuplicateIdNums = duplicateIdNums,
         };
+    }
+
+    static string? NormalizeIdNum(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    sealed class DbIdentityComparer : IEqualityComparer<(string IdNum, int IdType)>
+    {
+        public bool Equals((string IdNum, int IdType) x, (string IdNum, int IdType) y) =>
+            x.IdType == y.IdType &&
+            StringComparer.OrdinalIgnoreCase.Equals(x.IdNum, y.IdNum);
+
+        public int GetHashCode((string IdNum, int IdType) obj) =>
+            HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(obj.IdNum), obj.IdType);
     }
 }

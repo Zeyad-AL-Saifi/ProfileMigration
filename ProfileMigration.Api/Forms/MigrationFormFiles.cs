@@ -10,6 +10,9 @@ public sealed class ExcelMigrationForm
     /// If omitted, uses ExcelFilePath from appsettings.
     /// </summary>
     public IFormFile? ExcelFile { get; set; }
+
+    /// <summary>Compatibility field used by the original Python analysis API.</summary>
+    public IFormFile? File { get; set; }
 }
 
 /// <summary>Form-data for constants phase (areas Excel only; branches/id-types need no file).</summary>
@@ -25,7 +28,8 @@ public static class MigrationFormFiles
         ExcelMigrationForm? form, CancellationToken ct)
     {
         form ??= new ExcelMigrationForm();
-        if (form.ExcelFile is { Length: > 0 } file && IsRealUpload(file))
+        var file = form.ExcelFile is { Length: > 0 } ? form.ExcelFile : form.File;
+        if (file is { Length: > 0 } && IsRealUpload(file))
         {
             var (path, cleanup) = await SaveTempAsync(file, ct);
             return (new ExcelMigrationRequest { ExcelPath = path }, cleanup);

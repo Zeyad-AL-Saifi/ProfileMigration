@@ -121,3 +121,4 @@ E:\FIS\Asala\ProfileMigration\ProfileMigration\obj\Debug\net10.0\ProfileMigratio
 E:\FIS\Asala\ProfileMigration\ProfileMigration\obj\Debug\net10.0\ProfileMigration.App.genruntimeconfig.cache
 E:\FIS\Asala\ProfileMigration\ProfileMigration\obj\Debug\net10.0\ref\ProfileMigration.App.dll
 E:\FIS\Asala\ProfileMigration\ProfileMigration\bin\Debug\net10.0\area 2.xlsx
+E:\FIS\Asala\ProfileMigration\ProfileMigration\obj\Debug\net10.0\ProfileMigration.App.sourcelink.json

@@ -16,7 +16,6 @@ public static class ProfileExcelSource
     public const int IdCardHeaderRow = 1;
     public const int AddressHeaderRow = 1;
 
-    public const int MaxConflicts = 3;
     public const int DefaultBranchId = 6;
     public const int DefaultBankId = 1;
     public const byte DefaultAccountCurrId = 1;
@@ -45,11 +44,10 @@ public static class ProfileExcelSource
         string? MailPobox,
         IReadOnlyList<string> Phones);
 
-    public sealed record SourceRow(
+    public sealed record EligibleSourceRow(
         int RowNumber,
         int ClientId,
         string Company,
-        DateTime SortDate,
         string IdNum,
         int IdType,
         ProfilesTb Profile,
@@ -57,19 +55,6 @@ public static class ProfileExcelSource
         ProfilesPartnersTb? Partner,
         ProfileBankInformationTb? Bank,
         IReadOnlyList<string> Phones);
-
-    public sealed record MergedGroup(
-        string IdNum,
-        int IdType,
-        ProfilesTb Profile,
-        ProfileWorksTb? Work,
-        ProfilesPartnersTb? Partner,
-        ProfileBankInformationTb? Bank,
-        IReadOnlyList<string> Phones,
-        int SourceRowCount,
-        bool WasMerged,
-        IReadOnlyList<string> Conflicts,
-        bool HighConflict);
 
     public sealed record ValidationError(string Source, string Kind, string Name);
 
@@ -229,18 +214,20 @@ public static class ProfileExcelSource
 
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
             loaded.IdCards.TryGetValue((company, clientId.Value), out IdCardData? idCard);
-            rows.Add(new ClientEligibilityClassifier.ClientIdentityRow(company, clientId.Value, idCard?.CardKey));
+            string? idNum = idCard?.IdNum ?? GetString(row, h, "NATIONAL_ID");
+            int idType = idCard?.IdTypeId ?? 1;
+            rows.Add(new ClientEligibilityClassifier.ClientIdentityRow(
+                company, clientId.Value, idCard?.CardKey, idNum, idType));
         }
 
         return ClientEligibilityClassifier.Classify(rows);
     }
 
     /// <summary>
-    /// Bucket + merge Excel rows by (ID_NUM, ID_TYPE). High-conflict groups are still returned
-    /// with HighConflict=true so callers can skip/report them.
-    /// Only <see cref="ClientEligibilityClassifier"/>-eligible clients are included.
+    /// Map one output row per eligible Excel row. Duplicate identities are removed by
+    /// <see cref="ClientEligibilityClassifier"/>; rows are never merged.
     /// </summary>
-    public static List<MergedGroup> BuildMergedGroups(
+    public static List<EligibleSourceRow> BuildEligibleRows(
         LoadedWorkbook loaded,
         List<string>? log = null,
         ClientEligibilityClassifier.Result? eligibility = null)
@@ -248,7 +235,7 @@ public static class ProfileExcelSource
         log ??= [];
         eligibility ??= BuildEligibility(loaded);
         var h = loaded.ClientHeaders;
-        var groups = new Dictionary<(string IdNum, int IdType), List<SourceRow>>();
+        var result = new List<EligibleSourceRow>();
 
         for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
         {
@@ -281,42 +268,9 @@ public static class ProfileExcelSource
             var work = MapWork(row, h);
             var partner = MapPartner(r, row, h, log);
             var bank = MapBankInfo(row, h);
-            DateTime sortDate = GetDateTime(row, h, "MODIFY_DATE")
-                                ?? GetDateTime(row, h, "CREATE_DATE")
-                                ?? DateTime.MinValue;
-
-            var key = (idNum, idType);
-            if (!groups.TryGetValue(key, out var list))
-                groups[key] = list = [];
-            list.Add(new SourceRow(r, clientId.Value, company, sortDate, idNum, idType, profile, work, partner, bank, phones));
-        }
-
-        var result = new List<MergedGroup>(groups.Count);
-        foreach (var ((idNum, idType), rows) in groups)
-        {
-            if (rows.Count == 1)
-            {
-                var only = rows[0];
-                result.Add(new MergedGroup(
-                    idNum, idType, only.Profile, only.Work, only.Partner, only.Bank, only.Phones,
-                    1, false, [], false));
-                continue;
-            }
-
-            var ordered = rows.OrderByDescending(x => x.SortDate).ToList();
-            var conflicts = new List<string>();
-            var merged = ordered[0].Profile;
-            var work = ordered.Select(x => x.Work).FirstOrDefault(w => w is not null);
-            var partner = ordered.Select(x => x.Partner).FirstOrDefault(p => p is not null);
-            var bank = ordered.Select(x => x.Bank).FirstOrDefault(b => b is not null);
-            var phones = ordered.Select(x => x.Phones).FirstOrDefault(p => p.Count > 0) ?? Array.Empty<string>();
-
-            for (int i = 1; i < ordered.Count; i++)
-                MergeInto(merged, ordered[i].Profile, conflicts);
-
-            result.Add(new MergedGroup(
-                idNum, idType, merged, work, partner, bank, phones,
-                rows.Count, true, conflicts, conflicts.Count > MaxConflicts));
+            result.Add(new EligibleSourceRow(
+                r, clientId.Value, company, idNum, idType,
+                profile, work, partner, bank, phones));
         }
 
         return result;
@@ -595,28 +549,6 @@ public static class ProfileExcelSource
             CreatedOn = GetDateTime(row, h, "CREATE_DATE") ?? DateTime.Now,
         };
     }
-
-    public static void MergeInto(ProfilesTb target, ProfilesTb older, List<string> conflicts)
-    {
-        foreach (var prop in typeof(ProfilesTb).GetProperties())
-        {
-            if (!prop.CanRead || !prop.CanWrite) continue;
-            if (prop.Name is nameof(ProfilesTb.ProfileId) or nameof(ProfilesTb.CustId)) continue;
-
-            object? tVal = prop.GetValue(target);
-            object? oVal = prop.GetValue(older);
-            bool tEmpty = IsEmpty(tVal);
-            bool oEmpty = IsEmpty(oVal);
-
-            if (tEmpty && !oEmpty)
-                prop.SetValue(target, oVal);
-            else if (!tEmpty && !oEmpty && !Equals(tVal, oVal))
-                conflicts.Add($"{prop.Name}: newer='{tVal}' older='{oVal}'");
-        }
-    }
-
-    public static bool IsEmpty(object? v) =>
-        v is null || (v is string s && string.IsNullOrWhiteSpace(s));
 
     public static IXLWorksheet GetRequiredSheet(XLWorkbook wb, string name) =>
         wb.Worksheets.FirstOrDefault(w => string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase))
