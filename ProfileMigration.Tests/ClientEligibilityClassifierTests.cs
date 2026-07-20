@@ -78,6 +78,8 @@ public class ClientEligibilityClassifierTests
         Assert.False(result.IsEligible("ACAD", 200));
         Assert.True(result.IsEligible("ASALA", 101));
         Assert.Equal(2, result.SkippedCrossCompanyMatches);
+        Assert.Equal(1, result.CrossCompanyMatchedPairs);
+        Assert.Equal(0, result.TotalInternalDuplicateRecords);
         Assert.Equal(ReasonCrossCompanyMatch, result.Skipped[("ASALA", 100)]);
         Assert.Equal(ReasonCrossCompanyMatch, result.Skipped[("ACAD", 200)]);
     }
@@ -101,6 +103,8 @@ public class ClientEligibilityClassifierTests
         Assert.Equal(ReasonCrossCompanyMatch, result.Skipped[("ACAD", 3)]);
         Assert.Equal(3, result.SkippedCrossCompanyMatches);
         Assert.Equal(0, result.SkippedInternalDuplicates);
+        Assert.Equal(2, result.CrossCompanyMatchedPairs);
+        Assert.Equal(2, result.TotalInternalDuplicateRecords);
     }
 
     [Fact]

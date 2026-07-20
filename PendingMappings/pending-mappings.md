@@ -63,6 +63,7 @@ an answer comes back, then remove the entry below.
 - **Mapped**: `BANK_ACCOUNT_NUMBER → BANK_ACCOUNT_NO` when present.
 - **Placeholders** (no source): `BANK_ID = 1`, `ACCOUNT_CURR_ID = 1`,
   `IBAN = MIG-{ProfileId}` (unique per profile for PK/unique index).
+- **Nullable**: `BANK_ACCOUNT_NO = null` when the source account number is empty.
 - See `MapBankInfo` in `Program.cs`. Replace placeholders when real bank/IBAN
   sources are available.
 

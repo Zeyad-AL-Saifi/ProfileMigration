@@ -96,7 +96,7 @@ public sealed class ProfileMigrationService(
         for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
         {
             var row = loaded.ClientSheetWs.Row(r);
-            int? clientId = GetInt(row, h, "CLIENT_ID");
+            long? clientId = GetLong(row, h, "CLIENT_ID");
             if (clientId is null || clientId <= 0) continue;
 
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
@@ -232,7 +232,7 @@ public sealed class ProfileMigrationService(
         for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
         {
             var row = loaded.ClientSheetWs.Row(r);
-            int? clientId = GetInt(row, h, "CLIENT_ID");
+            long? clientId = GetLong(row, h, "CLIENT_ID");
             if (clientId is null || clientId <= 0) continue;
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
             if (!eligibility.IsEligible(company, clientId.Value)) continue;
@@ -323,9 +323,7 @@ public sealed class ProfileMigrationService(
                 ["migrated_count"] = inserted,
                 ["eligible_count"] = eligibility.EligibleCount,
                 ["skipped_missing_id_card"] = eligibility.SkippedMissingIdCard,
-                ["skipped_internal_duplicates"] = eligibility.SkippedInternalDuplicates,
                 ["skipped_cross_company_matches"] = eligibility.SkippedCrossCompanyMatches,
-                ["skipped_duplicate_id_nums"] = eligibility.SkippedDuplicateIdNums,
                 ["inserted"] = inserted,
                 ["skipped"] = skipped,
                 ["insertFailed"] = insertFailed,

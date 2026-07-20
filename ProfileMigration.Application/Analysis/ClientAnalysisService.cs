@@ -43,7 +43,7 @@ public sealed class ClientAnalysisService(MigrationPathResolver paths)
 
     sealed record AnalysisRow(
         string Company,
-        int ClientId,
+        long ClientId,
         int? CardType,
         string? CardNo,
         string? CardKey,
@@ -177,11 +177,15 @@ public sealed class ClientAnalysisService(MigrationPathResolver paths)
         {
             var row = ws.Row(rowNumber);
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, headers, "COMPANY"));
-            int? clientId = GetInt(row, headers, "CLIENT_ID");
+            var clientIdCell = row.Cell(headers["CLIENT_ID"]);
+            long? clientId = GetLong(row, headers, "CLIENT_ID");
             if (!ClientEligibilityClassifier.IsKnownCompany(company))
                 throw new InvalidDataException($"Unsupported COMPANY '{company}' at row {rowNumber}.");
             if (clientId is null || clientId <= 0)
-                throw new InvalidDataException($"Invalid CLIENT_ID at row {rowNumber}.");
+                throw new InvalidDataException(
+                    $"Invalid CLIENT_ID at row {rowNumber}. " +
+                    $"COMPANY='{company}', value='{DisplayCellValue(clientIdCell)}', " +
+                    $"reason='{DescribeInvalidClientId(clientIdCell)}'.");
 
             idCards.TryGetValue((company, clientId.Value), out var card);
             var values = headers.ToDictionary(
@@ -197,6 +201,33 @@ public sealed class ClientAnalysisService(MigrationPathResolver paths)
         }
 
         return (rows, headers.Keys.ToList(), ClientEligibilityClassifier.Classify(identities));
+    }
+
+    static string DisplayCellValue(IXLCell cell)
+    {
+        if (cell.IsEmpty()) return "<empty>";
+        var value = cell.GetFormattedString().Trim();
+        return string.IsNullOrEmpty(value) ? "<blank>" : value;
+    }
+
+    static string DescribeInvalidClientId(IXLCell cell)
+    {
+        if (cell.IsEmpty() || string.IsNullOrWhiteSpace(cell.GetFormattedString()))
+            return "CLIENT_ID is empty";
+
+        if (cell.TryGetValue<double>(out var number))
+        {
+            if (double.IsNaN(number) || double.IsInfinity(number))
+                return "CLIENT_ID is not a finite number";
+            if (number != Math.Truncate(number))
+                return "CLIENT_ID must be a whole number without decimals";
+            if (number < long.MinValue || number > long.MaxValue)
+                return "CLIENT_ID is outside the supported Int64 range";
+            if (number <= 0)
+                return "CLIENT_ID must be greater than zero";
+        }
+
+        return "CLIENT_ID is not a valid integer";
     }
 
     static List<Dictionary<string, object?>> BuildInternalGroups(

@@ -11,9 +11,9 @@ public static class EligibilityReportBuilder
         report.Stats["total_input"] = eligibility.TotalInput;
         report.Stats["eligible_count"] = eligibility.EligibleCount;
         report.Stats["skipped_missing_id_card"] = eligibility.SkippedMissingIdCard;
-        report.Stats["skipped_internal_duplicates"] = eligibility.SkippedInternalDuplicates;
         report.Stats["skipped_cross_company_matches"] = eligibility.SkippedCrossCompanyMatches;
-        report.Stats["skipped_duplicate_id_nums"] = eligibility.SkippedDuplicateIdNums;
+        report.Stats["cross_company_matched"] = eligibility.CrossCompanyMatchedPairs;
+        report.Stats["total_internal_duplicate_records"] = eligibility.TotalInternalDuplicateRecords;
 
         Add(report, ClientEligibilityClassifier.ReasonMissingIdCard,
             "Clients without ID_CARD_TYPE and ID_CARD_NO are excluded.",

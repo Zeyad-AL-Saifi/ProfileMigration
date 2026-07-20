@@ -46,7 +46,7 @@ public static class ProfileExcelSource
 
     public sealed record EligibleSourceRow(
         int RowNumber,
-        int ClientId,
+        long ClientId,
         string Company,
         string IdNum,
         int IdType,
@@ -67,8 +67,8 @@ public static class ProfileExcelSource
         public required IXLWorksheet ClientSheetWs { get; init; }
         public required int FirstClientDataRow { get; init; }
         public required int LastClientRow { get; init; }
-        public required Dictionary<(string Company, int ClientId), IdCardData> IdCards { get; init; }
-        public required Dictionary<(string Company, int ClientId), AddressData> Addresses { get; init; }
+        public required Dictionary<(string Company, long ClientId), IdCardData> IdCards { get; init; }
+        public required Dictionary<(string Company, long ClientId), AddressData> Addresses { get; init; }
         public required Dictionary<(string Company, int OldCode), int> BranchMap { get; init; }
         public int UnmappedCityCount { get; init; }
 
@@ -209,7 +209,7 @@ public static class ProfileExcelSource
         for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
         {
             var row = loaded.ClientSheetWs.Row(r);
-            int? clientId = GetInt(row, h, "CLIENT_ID");
+            long? clientId = GetLong(row, h, "CLIENT_ID");
             if (clientId is null || clientId <= 0) continue;
 
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
@@ -240,7 +240,7 @@ public static class ProfileExcelSource
         for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
         {
             var row = loaded.ClientSheetWs.Row(r);
-            int? clientId = GetInt(row, h, "CLIENT_ID");
+            long? clientId = GetLong(row, h, "CLIENT_ID");
             if (clientId is null || clientId <= 0) continue;
 
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
@@ -280,9 +280,9 @@ public static class ProfileExcelSource
     /// Load ID cards keyed by (COMPANY, CLIENT_ID) — same join as Analysis IdCardReader.
     /// First row wins per key.
     /// </summary>
-    public static Dictionary<(string Company, int ClientId), IdCardData> LoadIdCards(XLWorkbook wb)
+    public static Dictionary<(string Company, long ClientId), IdCardData> LoadIdCards(XLWorkbook wb)
     {
-        var result = new Dictionary<(string, int), IdCardData>();
+        var result = new Dictionary<(string, long), IdCardData>();
         var ws = GetRequiredSheet(wb, IdCardSheet);
         var h = BuildHeaderIndex(ws.Row(1));
         int last = ws.LastRowUsed()!.RowNumber();
@@ -290,7 +290,7 @@ public static class ProfileExcelSource
         for (int r = 2; r <= last; r++)
         {
             var row = ws.Row(r);
-            int? cid = GetInt(row, h, "CLIENT_ID");
+            long? cid = GetLong(row, h, "CLIENT_ID");
             if (cid is null || cid <= 0) continue;
 
             string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
@@ -316,20 +316,20 @@ public static class ProfileExcelSource
         return result;
     }
 
-    public static Dictionary<(string Company, int ClientId), AddressData> LoadAddresses(
+    public static Dictionary<(string Company, long ClientId), AddressData> LoadAddresses(
         XLWorkbook wb, Dictionary<int, int> cityIdMap, out int unmappedCityCount)
     {
-        var result = new Dictionary<(string, int), AddressData>();
+        var result = new Dictionary<(string, long), AddressData>();
         var ws = GetRequiredSheet(wb, AddressSheet);
         var h = BuildHeaderIndex(ws.Row(1));
         int last = ws.LastRowUsed()!.RowNumber();
         int unmapped = 0;
-        var buckets = new Dictionary<(string, int), List<(int Pref, AddressData Data)>>();
+        var buckets = new Dictionary<(string, long), List<(int Pref, AddressData Data)>>();
 
         for (int r = 2; r <= last; r++)
         {
             var row = ws.Row(r);
-            int? clientId = GetInt(row, h, "CLIENT_ID");
+            long? clientId = GetLong(row, h, "CLIENT_ID");
             if (clientId is null || clientId <= 0) continue;
 
             string company = GetString(row, h, "COMPANY")?.ToUpperInvariant() ?? "";
@@ -507,7 +507,6 @@ public static class ProfileExcelSource
     public static ProfileBankInformationTb? MapBankInfo(IXLRow row, Dictionary<string, int> h)
     {
         string? accountNo = GetString(row, h, "BANK_ACCOUNT_NUMBER");
-        if (string.IsNullOrWhiteSpace(accountNo)) return null;
 
         return new ProfileBankInformationTb
         {

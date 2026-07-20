@@ -14,7 +14,7 @@ public static class ClientEligibilityClassifier
 
     public sealed record ClientIdentityRow(
         string Company,
-        int ClientId,
+        long ClientId,
         string? CardKey,
         string? IdNum = null,
         int? IdType = null);
@@ -23,15 +23,21 @@ public static class ClientEligibilityClassifier
     {
         public int TotalInput { get; init; }
         public int EligibleCount => Eligible.Count;
-        public HashSet<(string Company, int ClientId)> Eligible { get; init; } = new();
-        public Dictionary<(string Company, int ClientId), string> Skipped { get; init; } = new();
+        public HashSet<(string Company, long ClientId)> Eligible { get; init; } = new();
+        public Dictionary<(string Company, long ClientId), string> Skipped { get; init; } = new();
 
         public int SkippedMissingIdCard { get; init; }
         public int SkippedInternalDuplicates { get; init; }
         public int SkippedCrossCompanyMatches { get; init; }
         public int SkippedDuplicateIdNums { get; init; }
 
-        public bool IsEligible(string company, int clientId) =>
+        /// <summary>Analysis-style count: ASALA rows × ACAD rows for every shared card key.</summary>
+        public int CrossCompanyMatchedPairs { get; init; }
+
+        /// <summary>Analysis-style count of records in internal duplicate card-key groups.</summary>
+        public int TotalInternalDuplicateRecords { get; init; }
+
+        public bool IsEligible(string company, long clientId) =>
             Eligible.Contains((NormalizeCompany(company), clientId));
 
         public IReadOnlyList<string> SampleSkipped(string reason, int limit = 20) =>
@@ -64,7 +70,7 @@ public static class ClientEligibilityClassifier
 
     public static Result Classify(IEnumerable<ClientIdentityRow> rows)
     {
-        var input = new List<(string Company, int ClientId, string? CardKey, string? IdNum, int? IdType)>();
+        var input = new List<(string Company, long ClientId, string? CardKey, string? IdNum, int? IdType)>();
         foreach (var r in rows)
         {
             var company = NormalizeCompany(r.Company);
@@ -72,8 +78,21 @@ public static class ClientEligibilityClassifier
             input.Add((company, r.ClientId, r.CardKey, NormalizeIdNum(r.IdNum), r.IdType));
         }
 
+        int crossCompanyMatchedPairs = input
+            .Where(x => !string.IsNullOrWhiteSpace(x.CardKey))
+            .GroupBy(x => x.CardKey!, StringComparer.Ordinal)
+            .Sum(group =>
+                group.Count(x => x.Company == "ASALA") *
+                group.Count(x => x.Company == "ACAD"));
+
+        int totalInternalDuplicateRecords = input
+            .Where(x => !string.IsNullOrWhiteSpace(x.CardKey))
+            .GroupBy(x => (x.Company, x.CardKey))
+            .Where(group => group.Count() >= 2)
+            .Sum(group => group.Count());
+
         // Dedupe by (company, clientId) — first wins (same as id-card join keep=first)
-        var unique = new Dictionary<(string, int), (string? CardKey, string? IdNum, int? IdType)>();
+        var unique = new Dictionary<(string, long), (string? CardKey, string? IdNum, int? IdType)>();
         foreach (var row in input)
         {
             var key = (row.Company, row.ClientId);
@@ -81,7 +100,7 @@ public static class ClientEligibilityClassifier
                 unique[key] = (row.CardKey, row.IdNum, row.IdType);
         }
 
-        var skipped = new Dictionary<(string Company, int ClientId), string>();
+        var skipped = new Dictionary<(string Company, long ClientId), string>();
         var missing = 0;
         int internalDupCount = 0;
 
@@ -173,7 +192,7 @@ public static class ClientEligibilityClassifier
             }
         }
 
-        var eligible = new HashSet<(string Company, int ClientId)>();
+        var eligible = new HashSet<(string Company, long ClientId)>();
         foreach (var key in unique.Keys)
         {
             if (!skipped.ContainsKey(key))
@@ -189,6 +208,8 @@ public static class ClientEligibilityClassifier
             SkippedInternalDuplicates = internalDupCount,
             SkippedCrossCompanyMatches = cross,
             SkippedDuplicateIdNums = duplicateIdNums,
+            CrossCompanyMatchedPairs = crossCompanyMatchedPairs,
+            TotalInternalDuplicateRecords = totalInternalDuplicateRecords,
         };
     }
 

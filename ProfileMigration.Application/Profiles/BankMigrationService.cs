@@ -50,18 +50,12 @@ public sealed class BankMigrationService(
                 "SELECT DISTINCT PROFILE_ID FROM RHODES_BANKING_SILA.PROFILE_BANK_INFORMATION_TB"))
             .ToHashSet();
 
-        int willInsert = 0, alreadyHasBank = 0, profileNotFound = 0, noBankData = 0;
+        int willInsert = 0, alreadyHasBank = 0, profileNotFound = 0;
         var notFoundSamples = new List<string>();
         var alreadySamples = new List<string>();
 
         foreach (var g in rows)
         {
-            if (g.Bank is null)
-            {
-                noBankData++;
-                continue;
-            }
-
             if (!profileByIdentity.TryGetValue(
                     ClientEligibilityClassifier.BuildDbIdentityKey(g.IdNum, g.IdType), out int profileId))
             {
@@ -86,16 +80,12 @@ public sealed class BankMigrationService(
         report.Stats["willInsert"] = willInsert;
         report.Stats["alreadyHasBank"] = alreadyHasBank;
         report.Stats["profileNotFound"] = profileNotFound;
-        report.Stats["noBankData"] = noBankData;
         report.Stats["profilesInDb"] = profileByIdentity.Count;
 
         ReportBuilder.AddIssue(report, "Warning", "PROFILE_NOT_FOUND",
             "Bank rows whose IdNum has no matching PROFILES_TB row — run profiles first.", profileNotFound, notFoundSamples);
         ReportBuilder.AddIssue(report, "Info", "ALREADY_HAS_BANK",
             "Profiles that already have bank info — will be skipped.", alreadyHasBank, alreadySamples);
-        ReportBuilder.AddIssue(report, "Info", "NO_BANK_DATA",
-            "Eligible rows with no BANK_ACCOUNT_NUMBER — nothing to insert.", noBankData);
-
         return report;
     }
 
@@ -105,7 +95,7 @@ public sealed class BankMigrationService(
         var log = new List<string>();
 
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
-        var rows = BuildEligibleRows(loaded, log).Where(g => g.Bank is not null).ToList();
+        var rows = BuildEligibleRows(loaded, log);
 
         Dictionary<string, int> profileByIdentity;
         HashSet<int> existingBankProfiles;

@@ -80,7 +80,7 @@ public sealed class AnalysisController(ClientAnalysisService service) : Controll
 
     BadRequestObjectResult? ValidateUpload(ExcelMigrationForm? form)
     {
-        var file = form?.File is { Length: > 0 } ? form.File : form?.ExcelFile;
+        var file = form?.ExcelFile;
         if (file is null || file.Length == 0)
             return BadRequest(new { detail = "An Excel file is required." });
 

@@ -11,6 +11,47 @@ namespace ProfileMigration.Tests;
 public sealed class ClientAnalysisServiceTests
 {
     [Fact]
+    public void Analyze_InvalidClientId_ReportsRowCompanyValueAndReason()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"analysis-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string clientsPath = Path.Combine(directory, "clients.xlsx");
+            string cardsPath = Path.Combine(directory, "cards.xlsx");
+
+            using (var workbook = new XLWorkbook())
+            {
+                var sheet = workbook.AddWorksheet("Match MF_CLIENT");
+                SetHeaders(sheet, "COMPANY", "CLIENT_ID");
+                sheet.Cell(2, 1).Value = "ASALA";
+                sheet.Cell(2, 2).Value = "ABC-123";
+                workbook.SaveAs(clientsPath);
+            }
+            SaveCards(cardsPath);
+
+            var resolver = new MigrationPathResolver(Options.Create(new MigrationOptions
+            {
+                ExcelFilePath = clientsPath,
+                IdCardExcelFilePath = cardsPath,
+                ContentRoot = directory,
+            }));
+
+            var error = Assert.Throws<InvalidDataException>(
+                () => new ClientAnalysisService(resolver).Analyze(clientsPath));
+
+            Assert.Contains("row 2", error.Message);
+            Assert.Contains("COMPANY='ASALA'", error.Message);
+            Assert.Contains("value='ABC-123'", error.Message);
+            Assert.Contains("not a valid integer", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Analyze_UsesSameDuplicatePopulationAsMigrationEligibility()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"analysis-tests-{Guid.NewGuid():N}");
