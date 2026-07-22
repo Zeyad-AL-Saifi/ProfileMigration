@@ -21,6 +21,8 @@ namespace ProfileMigration.DAL.Models;
 // ════════════════════════════════════════════════════════════════════════════════
 public partial class SilaDbContext
 {
+    public static string DefaultSchema { get; set; } = "RHODES_BANKING";
+
     // false -> low code (1), true -> high code (2).  Edit here to reconfigure.
     private const int CodeForFalse = 1;
     private const int CodeForTrue  = 2;
@@ -36,6 +38,8 @@ public partial class SilaDbContext
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
+        modelBuilder.HasDefaultSchema(DefaultSchema);
+
         modelBuilder.Entity<ProfilesTb>(entity =>
         {
             // CUST_TYPE_ID is non-nullable bool in the model.

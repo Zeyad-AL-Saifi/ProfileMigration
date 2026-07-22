@@ -40,14 +40,14 @@ public sealed class BankMigrationService(
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
         var profileByIdentity = (await conn.QueryAsync<(int ProfileId, string IdNum, int IdType)>(
-                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
+                $"SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM {connectionFactory.QualifyTable("PROFILES_TB")} WHERE ID_NUM IS NOT NULL"))
             .ToDictionary(
                 x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType),
                 x => x.ProfileId,
                 StringComparer.Ordinal);
 
         var existingBankProfiles = (await conn.QueryAsync<int>(
-                "SELECT DISTINCT PROFILE_ID FROM RHODES_BANKING_SILA.PROFILE_BANK_INFORMATION_TB"))
+                $"SELECT DISTINCT PROFILE_ID FROM {connectionFactory.QualifyTable("PROFILE_BANK_INFORMATION_TB")}"))
             .ToHashSet();
 
         int willInsert = 0, alreadyHasBank = 0, profileNotFound = 0;

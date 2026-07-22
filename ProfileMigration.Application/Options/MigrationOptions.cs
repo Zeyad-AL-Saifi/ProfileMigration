@@ -5,6 +5,7 @@ public sealed class MigrationOptions
     public const string SectionName = "Migration";
 
     public string ConnectionString { get; set; } = "";
+    public string DatabaseSchema { get; set; } = "RHODES_BANKING";
     public string ExcelFilePath { get; set; } = "Match MF_CLIENT - Copy (3).xlsx";
     public string IdCardExcelFilePath { get; set; } = "March MF_CLINT_ID_CARD.xlsx";
     public string AddressExcelFilePath { get; set; } = "MF_CLIENT_ADDRESSES.xlsx";

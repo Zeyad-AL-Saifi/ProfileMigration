@@ -50,6 +50,11 @@ public static class MigrationBatchInserter
             log.Add($"[ABORT BATCH] Transient Oracle connection failure after {MaxTransientAttempts} attempts: {RootMessage(ex)}");
             throw;
         }
+        catch (Exception ex) when (IsSystematicBatchFailure(ex))
+        {
+            log.Add($"[ABORT BATCH] Systematic DB error — fix before retry: {RootMessage(ex)}");
+            throw;
+        }
         catch (Exception ex)
         {
             if (items.Count == 1)
@@ -277,6 +282,30 @@ public static class MigrationBatchInserter
             if (oracleException.Message.Contains(
                     "Connection request timed out",
                     StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Errors that affect every row in a batch — splitting would only waste hours.
+    /// </summary>
+    static bool IsSystematicBatchFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is not OracleException oracleException)
+                continue;
+
+            if (oracleException.Number is
+                942 or   // table or view does not exist
+                904 or   // invalid identifier
+                1031 or  // insufficient privileges
+                2289 or  // FK — parent key missing
+                2291 or  // FK — child record violates parent
+                4043 or  // object invalid
+                4044)   // object does not exist
                 return true;
         }
 

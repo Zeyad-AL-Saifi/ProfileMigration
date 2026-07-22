@@ -27,18 +27,19 @@ public sealed class ConstantMigrationService(
         var report = new MigrationReportDto { Phase = "constants", CanProceed = true };
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var constantsTable = connectionFactory.QualifyTable("C_CONSTANTS_TB");
 
         var identity = await conn.QuerySingleOrDefaultAsync<(int? ConstantId, string? ConstantDesc)>(
-            """
+            $"""
             SELECT CONSTANT_ID AS ConstantId, CONSTANT_DESC AS ConstantDesc
-            FROM RHODES_BANKING_SILA.C_CONSTANTS_TB
+            FROM {constantsTable}
             WHERE CONSTANT_MAIN_ID = :mainId AND CONSTANT_ID = :constId
             """,
             new { mainId = MainId, constId = IdentityId });
 
         int passportCount = await conn.ExecuteScalarAsync<int>(
-            """
-            SELECT COUNT(1) FROM RHODES_BANKING_SILA.C_CONSTANTS_TB
+            $"""
+            SELECT COUNT(1) FROM {constantsTable}
             WHERE CONSTANT_MAIN_ID = :mainId AND CONSTANT_ID = :constId
             """,
             new { mainId = MainId, constId = JordanianPassportId });
@@ -75,6 +76,7 @@ public sealed class ConstantMigrationService(
     public async Task<PhaseRunResultDto> RunAsync(CancellationToken ct = default)
     {
         var log = new List<string>();
+        var constantsTable = connectionFactory.QualifyTable("C_CONSTANTS_TB");
         await using var ctx = new SilaDbContext(dbOptions);
 
         var conn = ctx.Database.GetDbConnection();
@@ -87,8 +89,8 @@ public sealed class ConstantMigrationService(
         string? currentDesc = null;
         await using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = """
-                SELECT CONSTANT_DESC FROM RHODES_BANKING_SILA.C_CONSTANTS_TB
+            cmd.CommandText = $"""
+                SELECT CONSTANT_DESC FROM {constantsTable}
                 WHERE CONSTANT_MAIN_ID = 1 AND CONSTANT_ID = 1
                 """;
             currentDesc = (await cmd.ExecuteScalarAsync(ct)) as string;
@@ -96,8 +98,8 @@ public sealed class ConstantMigrationService(
 
         if (currentDesc is null)
         {
-            await ctx.Database.ExecuteSqlRawAsync("""
-                INSERT INTO RHODES_BANKING_SILA.C_CONSTANTS_TB
+            await ctx.Database.ExecuteSqlRawAsync($"""
+                INSERT INTO {constantsTable}
                     (CONSTANT_MAIN_ID, CONSTANT_ID, CONSTANT_DESC, PARENT_CONSTANT_ID,
                      PMA_CODE, IS_UPDATABLE, IS_HIDDEN, CREATED_ON)
                 VALUES (1, 1, N'هوية', NULL, N'N', 0, 0, SYSDATE)
@@ -107,8 +109,8 @@ public sealed class ConstantMigrationService(
         }
         else if (!string.Equals(currentDesc.Trim(), IdentityDesc, StringComparison.Ordinal))
         {
-            await ctx.Database.ExecuteSqlRawAsync("""
-                UPDATE RHODES_BANKING_SILA.C_CONSTANTS_TB
+            await ctx.Database.ExecuteSqlRawAsync($"""
+                UPDATE {constantsTable}
                 SET CONSTANT_DESC = N'هوية'
                 WHERE CONSTANT_MAIN_ID = 1 AND CONSTANT_ID = 1
                 """, ct);
@@ -124,8 +126,8 @@ public sealed class ConstantMigrationService(
         int passportCount;
         await using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = """
-                SELECT COUNT(1) FROM RHODES_BANKING_SILA.C_CONSTANTS_TB
+            cmd.CommandText = $"""
+                SELECT COUNT(1) FROM {constantsTable}
                 WHERE CONSTANT_MAIN_ID = 1 AND CONSTANT_ID = 5
                 """;
             passportCount = Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
@@ -133,8 +135,8 @@ public sealed class ConstantMigrationService(
 
         if (passportCount == 0)
         {
-            await ctx.Database.ExecuteSqlRawAsync("""
-                INSERT INTO RHODES_BANKING_SILA.C_CONSTANTS_TB
+            await ctx.Database.ExecuteSqlRawAsync($"""
+                INSERT INTO {constantsTable}
                     (CONSTANT_MAIN_ID, CONSTANT_ID, CONSTANT_DESC, PARENT_CONSTANT_ID,
                      PMA_CODE, IS_UPDATABLE, IS_HIDDEN, CREATED_ON)
                 VALUES (1, 5, N'جواز سفر اردني', 2, N'N', 0, 0, DATE '2023-02-08')

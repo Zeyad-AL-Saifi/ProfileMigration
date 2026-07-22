@@ -37,13 +37,13 @@ public sealed class BranchMigrationService(
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
 
         var existingBranchIds = (await conn.QueryAsync<int>(
-            "SELECT BRANCH_ID FROM RHODES_BANKING_SILA.BRANCHES_TB WHERE BRANCH_ID BETWEEN 1 AND 9"))
+            $"SELECT BRANCH_ID FROM {connectionFactory.QualifyTable("BRANCHES_TB")} WHERE BRANCH_ID BETWEEN 1 AND 9"))
             .ToHashSet();
 
         var existingLangs = (await conn.QueryAsync<(int BranchId, string LangId)>(
-            """
+            $"""
             SELECT BRANCH_ID AS BranchId, LOWER(LANG_ID) AS LangId
-            FROM RHODES_BANKING_SILA.BRANCH_LANGS_TB
+            FROM {connectionFactory.QualifyTable("BRANCH_LANGS_TB")}
             WHERE BRANCH_ID BETWEEN 1 AND 9
             """)).Select(x => (x.BranchId, x.LangId)).ToHashSet();
 

@@ -19,27 +19,27 @@
    "T4TemplatePath": null,
    "Tables": [
       {
-         "Name": "RHODES_BANKING_SILA.BRANCH_LANGS_TB",
+         "Name": "RHODES_BANKING.BRANCH_LANGS_TB",
          "ObjectType": 0
       },
       {
-         "Name": "RHODES_BANKING_SILA.BRANCHES_TB",
+         "Name": "RHODES_BANKING.BRANCHES_TB",
          "ObjectType": 0
       },
       {
-         "Name": "RHODES_BANKING_SILA.PROFILE_BANK_INFORMATION_TB",
+         "Name": "RHODES_BANKING.PROFILE_BANK_INFORMATION_TB",
          "ObjectType": 0
       },
       {
-         "Name": "RHODES_BANKING_SILA.PROFILE_WORKS_TB",
+         "Name": "RHODES_BANKING.PROFILE_WORKS_TB",
          "ObjectType": 0
       },
       {
-         "Name": "RHODES_BANKING_SILA.PROFILES_PARTNERS_TB",
+         "Name": "RHODES_BANKING.PROFILES_PARTNERS_TB",
          "ObjectType": 0
       },
       {
-         "Name": "RHODES_BANKING_SILA.PROFILES_TB",
+         "Name": "RHODES_BANKING.PROFILES_TB",
          "ObjectType": 0
       }
    ],

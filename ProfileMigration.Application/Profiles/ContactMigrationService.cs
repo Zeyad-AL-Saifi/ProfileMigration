@@ -40,16 +40,16 @@ public sealed class ContactMigrationService(
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
         var profileByIdentity = (await conn.QueryAsync<(int ProfileId, string IdNum, int IdType)>(
-                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
+                $"SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM {connectionFactory.QualifyTable("PROFILES_TB")} WHERE ID_NUM IS NOT NULL"))
             .ToDictionary(
                 x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType),
                 x => x.ProfileId,
                 StringComparer.Ordinal);
 
         var existingContacts = (await conn.QueryAsync<(int ProfileId, string ContactInfo)>(
-                """
+                $"""
                 SELECT PROFILE_ID AS ProfileId, CONTACT_INFO AS ContactInfo
-                FROM RHODES_BANKING_SILA.PROFILE_CONTACT_DTS_TB
+                FROM {connectionFactory.QualifyTable("PROFILE_CONTACT_DTS_TB")}
                 WHERE CONTACT_TYPE_ID = 1
                 """))
             .Select(x => (x.ProfileId, ContactInfo: x.ContactInfo?.Trim() ?? ""))

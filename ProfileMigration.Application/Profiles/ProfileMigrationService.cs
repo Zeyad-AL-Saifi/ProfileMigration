@@ -77,9 +77,9 @@ public sealed class ProfileMigrationService(
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
         var existingIdentities = (await conn.QueryAsync<(string IdNum, int IdType)>(
-            """
+            $"""
             SELECT ID_NUM AS IdNum, ID_TYPE_ID AS IdType
-            FROM RHODES_BANKING_SILA.PROFILES_TB
+            FROM {connectionFactory.QualifyTable("PROFILES_TB")}
             WHERE ID_NUM IS NOT NULL
             """))
             .Select(x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType))
@@ -184,6 +184,13 @@ public sealed class ProfileMigrationService(
         var excelPaths = paths.ResolveProfileExcelPaths(request?.ExcelPath);
         var log = new List<string>();
 
+        await PreflightDatabaseAsync(log, ct);
+        logger.LogInformation(
+            "Profile DB preflight passed in {ElapsedMs} ms (schema={Schema})",
+            stageTimer.ElapsedMilliseconds,
+            connectionFactory.DatabaseSchema);
+
+        stageTimer.Restart();
         using var loaded = Open(excelPaths.ClientPath, excelPaths.IdCardPath, excelPaths.AddressPath);
         logger.LogInformation(
             "Profile Excel sources loaded in {ElapsedMs} ms. Client rows: {ClientRows}, ID cards: {IdCards}, addresses: {Addresses}",
@@ -206,44 +213,16 @@ public sealed class ProfileMigrationService(
             eligibility.EligibleCount,
             rows.Count);
 
-        int nextProfileId;
-        var seenIdentities = new HashSet<string>(StringComparer.Ordinal);
-
         stageTimer.Restart();
-        await using (var seqCtx = new SilaDbContext(dbOptions))
-        {
-            nextProfileId = ((await seqCtx.ProfilesTbs.Select(p => (int?)p.ProfileId).MaxAsync(ct)) ?? -1) + 1;
-            var existingIdentities = await seqCtx.ProfilesTbs
-                .Where(p => p.IdNum != null)
-                .Select(p => new { p.IdNum, p.IdTypeId })
-                .ToListAsync(ct);
-            foreach (var identity in existingIdentities)
-                seenIdentities.Add(ClientEligibilityClassifier.BuildDbIdentityKey(
-                    identity.IdNum!, identity.IdTypeId ?? 1));
-        }
+        var (nextProfileId, seenIdentities) = await LoadExistingProfileKeysAsync(ct);
         logger.LogInformation(
-            "Existing profile keys loaded in {ElapsedMs} ms. Existing IDs: {ExistingIds}",
+            "Existing profile keys loaded in {ElapsedMs} ms. Next ProfileId={NextProfileId}, existing keys={ExistingIds}",
             stageTimer.ElapsedMilliseconds,
+            nextProfileId,
             seenIdentities.Count);
 
-        int missingIdNumCount = 0, alreadyInDbCount = 0;
-
-        var h = loaded.ClientHeaders;
-        for (int r = loaded.FirstClientDataRow; r <= loaded.LastClientRow; r++)
-        {
-            var row = loaded.ClientSheetWs.Row(r);
-            long? clientId = GetLong(row, h, "CLIENT_ID");
-            if (clientId is null || clientId <= 0) continue;
-            string company = ClientEligibilityClassifier.NormalizeCompany(GetString(row, h, "COMPANY"));
-            if (!eligibility.IsEligible(company, clientId.Value)) continue;
-
-            loaded.IdCards.TryGetValue((company, clientId.Value), out IdCardData? idCard);
-            string? idNum = idCard?.IdNum ?? GetString(row, h, "NATIONAL_ID");
-            if (string.IsNullOrWhiteSpace(idNum))
-            {
-                missingIdNumCount++;
-            }
-        }
+        int missingIdNumCount = Math.Max(0, eligibility.EligibleCount - rows.Count);
+        int alreadyInDbCount = 0;
 
         var batch = new List<ProfilesTb>(MigrationBatchInserter.BatchSize);
         int inserted = 0, insertFailed = 0;
@@ -253,6 +232,12 @@ public sealed class ProfileMigrationService(
             + eligibility.SkippedInternalDuplicates
             + eligibility.SkippedCrossCompanyMatches
             + eligibility.SkippedDuplicateIdNums;
+
+        logger.LogInformation(
+            "Starting profile inserts: {RowCount} rows to process (first DB write after up to {BatchSize} rows)",
+            rows.Count,
+            MigrationBatchInserter.BatchSize);
+        log.Add($"[INSERT START] rows={rows.Count} schema={connectionFactory.DatabaseSchema} nextProfileId={nextProfileId}");
 
         foreach (var source in rows)
         {
@@ -339,4 +324,51 @@ public sealed class ProfileMigrationService(
             dbOptions, batch,
             p => $"[SKIP] ProfileId={p.ProfileId} IdNum={p.IdNum}: ",
             log, ct);
+
+    async Task PreflightDatabaseAsync(List<string> log, CancellationToken ct)
+    {
+        using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var schema = connectionFactory.DatabaseSchema;
+        var branchesTable = connectionFactory.QualifyTable("BRANCHES_TB");
+        var profilesTable = connectionFactory.QualifyTable("PROFILES_TB");
+
+        try
+        {
+            int branchCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(1) FROM {branchesTable}");
+            int profileCount = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(1) FROM {profilesTable}");
+            log.Add($"[PREFLIGHT] schema={schema} branches={branchCount} existingProfiles={profileCount}");
+
+            if (branchCount == 0)
+            {
+                throw new InvalidOperationException(
+                    $"BRANCHES_TB in schema '{schema}' is empty. Run POST /api/migration/branches/run first.");
+            }
+        }
+        catch (Oracle.ManagedDataAccess.Client.OracleException ex) when (ex.Number == 942)
+        {
+            throw new InvalidOperationException(
+                $"Table not found in schema '{schema}'. Check DatabaseSchema in appsettings.json.", ex);
+        }
+    }
+
+    async Task<(int NextProfileId, HashSet<string> SeenIdentities)> LoadExistingProfileKeysAsync(CancellationToken ct)
+    {
+        using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var profilesTable = connectionFactory.QualifyTable("PROFILES_TB");
+
+        int nextProfileId = (await conn.ExecuteScalarAsync<int?>(
+            $"SELECT MAX(PROFILE_ID) FROM {profilesTable}")) ?? -1;
+        nextProfileId++;
+
+        var seenIdentities = (await conn.QueryAsync<(string IdNum, int IdType)>(
+            $"""
+            SELECT ID_NUM AS IdNum, ID_TYPE_ID AS IdType
+            FROM {profilesTable}
+            WHERE ID_NUM IS NOT NULL
+            """))
+            .Select(x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType))
+            .ToHashSet(StringComparer.Ordinal);
+
+        return (nextProfileId, seenIdentities);
+    }
 }

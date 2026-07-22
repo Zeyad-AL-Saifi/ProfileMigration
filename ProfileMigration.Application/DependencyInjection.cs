@@ -22,6 +22,7 @@ public static class DependencyInjection
         services.Configure<MigrationOptions>(opts =>
         {
             opts.ConnectionString = configuration.GetConnectionString("OracleDb") ?? "";
+            opts.DatabaseSchema = configuration["DatabaseSchema"] ?? opts.DatabaseSchema;
             opts.ExcelFilePath = configuration["ExcelFilePath"] ?? opts.ExcelFilePath;
             opts.IdCardExcelFilePath = configuration["IdCardExcelFilePath"] ?? opts.IdCardExcelFilePath;
             opts.AddressExcelFilePath = configuration["AddressExcelFilePath"] ?? opts.AddressExcelFilePath;
@@ -39,6 +40,7 @@ public static class DependencyInjection
         services.AddDbContext<SilaDbContext>((sp, b) =>
         {
             var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<MigrationOptions>>().Value;
+            SilaDbContext.DefaultSchema = opts.DatabaseSchema;
             b.UseOracle(opts.ConnectionString);
         });
 
@@ -46,6 +48,7 @@ public static class DependencyInjection
         services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<MigrationOptions>>().Value;
+            SilaDbContext.DefaultSchema = opts.DatabaseSchema;
             return new DbContextOptionsBuilder<SilaDbContext>()
                 .UseOracle(opts.ConnectionString)
                 .Options;

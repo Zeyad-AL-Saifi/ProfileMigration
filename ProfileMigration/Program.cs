@@ -12,6 +12,9 @@ var config = new ConfigurationBuilder()
 string connStr = config.GetConnectionString("OracleDb")
     ?? throw new Exception("Missing 'OracleDb' connection string in appsettings.json.");
 
+string databaseSchema = config["DatabaseSchema"] ?? "RHODES_BANKING";
+SilaDbContext.DefaultSchema = databaseSchema;
+
 string rawPath = config["ExcelFilePath"] ?? "Clients Details Combined.xlsx";
 string excelPath = Path.IsPathRooted(rawPath)
     ? rawPath
@@ -24,6 +27,7 @@ string areaExcelPath = Path.IsPathRooted(rawAreaPath)
 
 Console.WriteLine($"Source : {excelPath}");
 Console.WriteLine($"Areas  : {areaExcelPath}");
+Console.WriteLine($"Schema : {databaseSchema}");
 Console.WriteLine($"Target : {connStr}\n");
 
 // ─── EF Core options ──────────────────────────────────────────────────────────
@@ -555,9 +559,11 @@ static async Task EnsureBranchesSeededAsync(DbContextOptions<SilaDbContext> opts
 /// </summary>
 static async Task EnsureJordanianPassportConstantAsync(SilaDbContext ctx)
 {
-    const string checkSql = """
+    var constantsTable = $"{SilaDbContext.DefaultSchema}.C_CONSTANTS_TB";
+
+    var checkSql = $"""
         SELECT COUNT(1)
-        FROM RHODES_BANKING_SILA.C_CONSTANTS_TB
+        FROM {constantsTable}
         WHERE CONSTANT_MAIN_ID = 1
           AND CONSTANT_ID = 5
         """;
@@ -577,8 +583,8 @@ static async Task EnsureJordanianPassportConstantAsync(SilaDbContext ctx)
         }
     }
 
-    const string insertSql = """
-        INSERT INTO RHODES_BANKING_SILA.C_CONSTANTS_TB
+    var insertSql = $"""
+        INSERT INTO {constantsTable}
             (CONSTANT_MAIN_ID, CONSTANT_ID, CONSTANT_DESC, PARENT_CONSTANT_ID,
              PMA_CODE, IS_UPDATABLE, IS_HIDDEN, CREATED_ON)
         VALUES

@@ -41,14 +41,14 @@ public sealed class PartnerMigrationService(
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
         var profileByIdentity = (await conn.QueryAsync<(int ProfileId, string IdNum, int IdType)>(
-                "SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM RHODES_BANKING_SILA.PROFILES_TB WHERE ID_NUM IS NOT NULL"))
+                $"SELECT PROFILE_ID AS ProfileId, ID_NUM AS IdNum, ID_TYPE_ID AS IdType FROM {connectionFactory.QualifyTable("PROFILES_TB")} WHERE ID_NUM IS NOT NULL"))
             .ToDictionary(
                 x => ClientEligibilityClassifier.BuildDbIdentityKey(x.IdNum, x.IdType),
                 x => x.ProfileId,
                 StringComparer.Ordinal);
 
         var existingPartnerProfiles = (await conn.QueryAsync<int>(
-                "SELECT DISTINCT PROFILE_ID FROM RHODES_BANKING_SILA.PROFILES_PARTNERS_TB"))
+                $"SELECT DISTINCT PROFILE_ID FROM {connectionFactory.QualifyTable("PROFILES_PARTNERS_TB")}"))
             .ToHashSet();
 
         int willInsert = 0, alreadyHasPartner = 0, profileNotFound = 0, noPartnerData = 0;

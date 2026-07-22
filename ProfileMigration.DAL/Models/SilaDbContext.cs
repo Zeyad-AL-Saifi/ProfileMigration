@@ -34,7 +34,7 @@ public partial class SilaDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder
-            .HasDefaultSchema("RHODES_BANKING_SILA")
+            .HasDefaultSchema("RHODES_BANKING")
             .UseCollation("USING_NLS_COMP");
 
         modelBuilder.Entity<BranchLangsTb>(entity =>

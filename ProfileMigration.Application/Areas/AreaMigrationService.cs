@@ -32,10 +32,10 @@ public sealed class AreaMigrationService(
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
 
         int existingConsts = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM RHODES_BANKING_SILA.C_CONSTANTS_TB WHERE CONSTANT_MAIN_ID = :mainId",
+            $"SELECT COUNT(1) FROM {connectionFactory.QualifyTable("C_CONSTANTS_TB")} WHERE CONSTANT_MAIN_ID = :mainId",
             new { mainId = AreaMainId });
         int existingLangs = await conn.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM RHODES_BANKING_SILA.C_CONSTANT_LANGS_TB WHERE CONSTANT_MAIN_ID = :mainId",
+            $"SELECT COUNT(1) FROM {connectionFactory.QualifyTable("C_CONSTANT_LANGS_TB")} WHERE CONSTANT_MAIN_ID = :mainId",
             new { mainId = AreaMainId });
 
         report.Stats["sourceValidRows"] = valid;
