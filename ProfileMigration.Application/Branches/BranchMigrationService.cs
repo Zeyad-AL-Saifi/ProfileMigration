@@ -90,7 +90,7 @@ public sealed class BranchMigrationService(
                 CloseFlag = false,
                 CreatedOn = now,
                 IsHidden = false,
-                GovernorateId = id,
+                GovernorateId = null,
             });
             log.Add($"[ADD] BRANCHES_TB BranchId={id} ({nameEn})");
         }
