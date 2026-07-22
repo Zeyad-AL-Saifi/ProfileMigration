@@ -14,18 +14,21 @@ public static class MigrationBatchInserter
 {
     public const int BatchSize = 5_000;
     const int MaxTransientAttempts = 3;
-    const int CommandTimeoutSeconds = 600;
+    const int CommandTimeoutSeconds = 120;
+    const int MaxRejectedRowsPerBatch = 100;
 
     public static async Task<int> InsertAsync<TEntity>(
         DbContextOptions<SilaDbContext> dbOptions,
         IReadOnlyList<TEntity> items,
         Func<TEntity, string> skipMessage,
         List<string> log,
-        CancellationToken ct) where TEntity : class
+        CancellationToken ct,
+        Action<string>? progress = null) where TEntity : class
     {
         if (items.Count == 0) return 0;
+        var fallbackState = new FallbackState();
         return await InsertWithFallbackAsync(
-            dbOptions, items, skipMessage, log, depth: 0, ct);
+            dbOptions, items, skipMessage, log, fallbackState, progress, depth: 0, ct);
     }
 
     static async Task<int> InsertWithFallbackAsync<TEntity>(
@@ -33,6 +36,8 @@ public static class MigrationBatchInserter
         IReadOnlyList<TEntity> items,
         Func<TEntity, string> skipMessage,
         List<string> log,
+        FallbackState fallbackState,
+        Action<string>? progress,
         int depth,
         CancellationToken ct) where TEntity : class
     {
@@ -45,14 +50,22 @@ public static class MigrationBatchInserter
         {
             throw;
         }
+        catch (BatchAbortException)
+        {
+            throw;
+        }
         catch (Exception ex) when (IsTransientConnectionFailure(ex))
         {
-            log.Add($"[ABORT BATCH] Transient Oracle connection failure after {MaxTransientAttempts} attempts: {RootMessage(ex)}");
+            string message = $"[ABORT BATCH] Transient Oracle connection failure after {MaxTransientAttempts} attempts: {RootMessage(ex)}";
+            log.Add(message);
+            progress?.Invoke(message);
             throw;
         }
         catch (Exception ex) when (IsSystematicBatchFailure(ex))
         {
-            log.Add($"[ABORT BATCH] Systematic DB error — fix before retry: {RootMessage(ex)}");
+            string message = $"[ABORT BATCH] Systematic DB error — fix before retry: {RootMessage(ex)}";
+            log.Add(message);
+            progress?.Invoke(message);
             throw;
         }
         catch (Exception ex)
@@ -60,20 +73,34 @@ public static class MigrationBatchInserter
             if (items.Count == 1)
             {
                 log.Add(skipMessage(items[0]) + RootMessage(ex));
+                fallbackState.RejectedRows++;
+                if (fallbackState.RejectedRows >= MaxRejectedRowsPerBatch)
+                {
+                    string message =
+                        $"[ABORT BATCH] Rejected {fallbackState.RejectedRows} individual rows. " +
+                        $"This indicates a widespread data/schema problem. Last error: {RootMessage(ex)}";
+                    log.Add(message);
+                    progress?.Invoke(message);
+                    throw new BatchAbortException(message, ex);
+                }
                 return 0;
             }
 
             if (depth == 0)
-                log.Add($"[BATCH SPLIT] {items.Count} rows failed as a batch: {RootMessage(ex)}");
+            {
+                string message = $"[BATCH SPLIT] {items.Count} rows failed as a batch: {RootMessage(ex)}";
+                log.Add(message);
+                progress?.Invoke(message);
+            }
 
             int midpoint = items.Count / 2;
             var left = items.Take(midpoint).ToArray();
             var right = items.Skip(midpoint).ToArray();
 
             int leftInserted = await InsertWithFallbackAsync(
-                dbOptions, left, skipMessage, log, depth + 1, ct);
+                dbOptions, left, skipMessage, log, fallbackState, progress, depth + 1, ct);
             int rightInserted = await InsertWithFallbackAsync(
-                dbOptions, right, skipMessage, log, depth + 1, ct);
+                dbOptions, right, skipMessage, log, fallbackState, progress, depth + 1, ct);
             return leftInserted + rightInserted;
         }
     }
@@ -299,11 +326,15 @@ public static class MigrationBatchInserter
                 continue;
 
             if (oracleException.Number is
+                54 or   // resource busy / NOWAIT lock
+                60 or   // deadlock
+                1013 or // command cancelled or timed out
                 942 or   // table or view does not exist
                 904 or   // invalid identifier
                 1031 or  // insufficient privileges
                 2289 or  // FK — parent key missing
                 2291 or  // FK — child record violates parent
+                30006 or // DML lock timeout
                 4043 or  // object invalid
                 4044)   // object does not exist
                 return true;
@@ -311,6 +342,14 @@ public static class MigrationBatchInserter
 
         return false;
     }
+
+    sealed class FallbackState
+    {
+        public int RejectedRows { get; set; }
+    }
+
+    sealed class BatchAbortException(string message, Exception innerException)
+        : Exception(message, innerException);
 
     static string RootMessage(Exception exception)
     {

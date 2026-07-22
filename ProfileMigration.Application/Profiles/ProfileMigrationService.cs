@@ -323,7 +323,8 @@ public sealed class ProfileMigrationService(
         await MigrationBatchInserter.InsertAsync(
             dbOptions, batch,
             p => $"[SKIP] ProfileId={p.ProfileId} IdNum={p.IdNum}: ",
-            log, ct);
+            log, ct,
+            message => logger.LogError("{MigrationBatchMessage}", message));
 
     async Task PreflightDatabaseAsync(List<string> log, CancellationToken ct)
     {
@@ -356,9 +357,8 @@ public sealed class ProfileMigrationService(
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
         var profilesTable = connectionFactory.QualifyTable("PROFILES_TB");
 
-        int nextProfileId = (await conn.ExecuteScalarAsync<int?>(
-            $"SELECT MAX(PROFILE_ID) FROM {profilesTable}")) ?? -1;
-        nextProfileId++;
+        int nextProfileId = ((await conn.ExecuteScalarAsync<int?>(
+            $"SELECT MAX(PROFILE_ID) FROM {profilesTable}")) ?? 0) + 1;
 
         var seenIdentities = (await conn.QueryAsync<(string IdNum, int IdType)>(
             $"""
