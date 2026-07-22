@@ -16,7 +16,7 @@ public static class ProfileExcelSource
     public const int IdCardHeaderRow = 1;
     public const int AddressHeaderRow = 1;
 
-    public const int DefaultBranchId = 6;
+    public const int DefaultBranchId = 1;
     public const int DefaultBankId = 1;
     public const byte DefaultAccountCurrId = 1;
 

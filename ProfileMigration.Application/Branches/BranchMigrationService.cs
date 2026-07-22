@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ProfileMigration.Application.Data;
 using ProfileMigration.Application.Dtos;
 using ProfileMigration.DAL.Models;
@@ -8,18 +9,20 @@ namespace ProfileMigration.Application.Branches;
 
 public sealed class BranchMigrationService(
     DbContextOptions<SilaDbContext> dbOptions,
-    IOracleConnectionFactory connectionFactory)
+    IOracleConnectionFactory connectionFactory,
+    ILogger<BranchMigrationService> logger)
 {
     static readonly (int Id, string NameEn, bool IsCentral)[] SeedBranches =
     [
-        (1, "Jenin", false), (2, "Tulkarm", false), (3, "Tubas", false),
+        (1, "Default", false), (2, "Tulkarm", false), (3, "Tubas", false),
         (4, "Nablus", false), (5, "Ramallah", true), (6, "Jericho", false),
         (7, "Bethlehem", false), (8, "Hebron", false), (9, "Gaza", false),
+        (10, "Jenin", false),
     ];
 
     static readonly (int BranchId, string LangId, string Name)[] SeedLangs =
     [
-        (1, "en", "Jenin"), (1, "ar", "جنين"),
+        (1, "en", "Default"), (1, "ar", "Default"),
         (2, "en", "Tulkarm"), (2, "ar", "طولكرم"),
         (3, "en", "Tubas"), (3, "ar", "طوباس"),
         (4, "en", "Nablus"), (4, "ar", "نابلس"),
@@ -28,6 +31,7 @@ public sealed class BranchMigrationService(
         (7, "en", "Bethlehem"), (7, "ar", "بيت لحم"),
         (8, "en", "Hebron"), (8, "ar", "الخليل"),
         (9, "en", "Gaza"), (9, "ar", "غزة"),
+        (10, "en", "Jenin"), (10, "ar", "جنين"),
     ];
 
     public async Task<MigrationReportDto> ValidateAsync(CancellationToken ct = default)
@@ -36,37 +40,27 @@ public sealed class BranchMigrationService(
 
         using var conn = await connectionFactory.CreateOpenConnectionAsync(ct);
 
-        var existingBranchIds = (await conn.QueryAsync<int>(
-            $"SELECT BRANCH_ID FROM {connectionFactory.QualifyTable("BRANCHES_TB")} WHERE BRANCH_ID BETWEEN 1 AND 9"))
-            .ToHashSet();
-
-        var existingLangs = (await conn.QueryAsync<(int BranchId, string LangId)>(
-            $"""
-            SELECT BRANCH_ID AS BranchId, LOWER(LANG_ID) AS LangId
-            FROM {connectionFactory.QualifyTable("BRANCH_LANGS_TB")}
-            WHERE BRANCH_ID BETWEEN 1 AND 9
-            """)).Select(x => (x.BranchId, x.LangId)).ToHashSet();
-
-        int missingBranches = SeedBranches.Count(b => !existingBranchIds.Contains(b.Id));
-        int missingLangs = SeedLangs.Count(l => !existingLangs.Contains((l.BranchId, l.LangId.ToLowerInvariant())));
+        int existingBranches = await conn.ExecuteScalarAsync<int>(
+            $"SELECT COUNT(1) FROM {connectionFactory.QualifyTable("BRANCHES_TB")}");
+        int existingLangs = await conn.ExecuteScalarAsync<int>(
+            $"SELECT COUNT(1) FROM {connectionFactory.QualifyTable("BRANCH_LANGS_TB")}");
 
         report.Stats["expectedBranches"] = SeedBranches.Length;
-        report.Stats["existingBranches"] = existingBranchIds.Count;
-        report.Stats["willInsertBranches"] = missingBranches;
-        report.Stats["willSkipBranches"] = SeedBranches.Length - missingBranches;
+        report.Stats["existingBranches"] = existingBranches;
+        report.Stats["willDeleteBranches"] = existingBranches;
+        report.Stats["willInsertBranches"] = SeedBranches.Length;
         report.Stats["expectedLangs"] = SeedLangs.Length;
-        report.Stats["willInsertLangs"] = missingLangs;
-        report.Stats["willSkipLangs"] = SeedLangs.Length - missingLangs;
+        report.Stats["existingLangs"] = existingLangs;
+        report.Stats["willDeleteLangs"] = existingLangs;
+        report.Stats["willInsertLangs"] = SeedLangs.Length;
 
-        ReportBuilder.AddIssue(report, "Info", "BRANCHES_MISSING",
-            "Branches that will be inserted (1-9).", missingBranches,
-            SeedBranches.Where(b => !existingBranchIds.Contains(b.Id)).Select(b => $"{b.Id}:{b.NameEn}"));
-
-        ReportBuilder.AddIssue(report, "Info", "BRANCH_LANGS_MISSING",
-            "Branch language rows that will be inserted.", missingLangs);
-
-        report.Breakdown["missingBranchIds"] = SeedBranches
-            .Where(b => !existingBranchIds.Contains(b.Id)).Select(b => b.Id).ToList();
+        ReportBuilder.AddIssue(
+            report,
+            "Info",
+            "BRANCHES_REPLACE",
+            "Existing branches and language rows will be replaced by the configured branches (1-10).",
+            existingBranches + existingLangs,
+            SeedBranches.Select(b => $"{b.Id}:{b.NameEn}"));
 
         return report;
     }
@@ -79,24 +73,10 @@ public sealed class BranchMigrationService(
         var now = DateTime.Now;
 
         await using var ctx = new SilaDbContext(dbOptions);
-
-        var existingIds = (await ctx.BranchesTbs.Select(b => b.BranchId).ToListAsync(ct)).ToHashSet();
-        var existingLangKeys = (await ctx.BranchLangsTbs
-                .Select(l => new { l.BranchId, l.LangId }).ToListAsync(ct))
-            .Select(x => (x.BranchId, LangId: x.LangId.ToLowerInvariant()))
-            .ToHashSet();
-
-        int branchesInserted = 0, branchesSkipped = 0, langsInserted = 0, langsSkipped = 0;
+        await using var transaction = await ctx.Database.BeginTransactionAsync(ct);
 
         foreach (var (id, nameEn, isCentral) in SeedBranches)
         {
-            if (existingIds.Contains(id))
-            {
-                branchesSkipped++;
-                log.Add($"[SKIP] BRANCHES_TB BranchId={id} ({nameEn})");
-                continue;
-            }
-
             ctx.BranchesTbs.Add(new BranchesTb
             {
                 BranchId = id,
@@ -112,19 +92,11 @@ public sealed class BranchMigrationService(
                 IsHidden = false,
                 GovernorateId = id,
             });
-            branchesInserted++;
             log.Add($"[ADD] BRANCHES_TB BranchId={id} ({nameEn})");
         }
 
         foreach (var (branchId, langId, name) in SeedLangs)
         {
-            if (existingLangKeys.Contains((branchId, langId.ToLowerInvariant())))
-            {
-                langsSkipped++;
-                log.Add($"[SKIP] BRANCH_LANGS_TB ({branchId},{langId})");
-                continue;
-            }
-
             ctx.BranchLangsTbs.Add(new BranchLangsTb
             {
                 BranchId = branchId,
@@ -132,26 +104,43 @@ public sealed class BranchMigrationService(
                 BranchName = name,
                 CreatedOn = now,
             });
-            langsInserted++;
             log.Add($"[ADD] BRANCH_LANGS_TB ({branchId},{langId}) '{name}'");
         }
 
-        if (branchesInserted + langsInserted > 0)
-            await ctx.SaveChangesAsync(ct);
-
-        return new PhaseRunResultDto
+        try
         {
-            Phase = "branches",
-            Success = true,
-            Message = $"Branches: {branchesInserted} inserted, {branchesSkipped} skipped. Langs: {langsInserted} inserted, {langsSkipped} skipped.",
-            Stats =
+            int langsDeleted = await ctx.BranchLangsTbs.ExecuteDeleteAsync(ct);
+            int branchesDeleted = await ctx.BranchesTbs.ExecuteDeleteAsync(ct);
+            await ctx.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+
+            logger.LogWarning(
+                "Branches replaced. Deleted {BranchesDeleted} branches and {LangsDeleted} language rows; inserted {BranchesInserted} branches and {LangsInserted} language rows",
+                branchesDeleted,
+                langsDeleted,
+                SeedBranches.Length,
+                SeedLangs.Length);
+
+            return new PhaseRunResultDto
             {
-                ["branchesInserted"] = branchesInserted,
-                ["branchesSkipped"] = branchesSkipped,
-                ["langsInserted"] = langsInserted,
-                ["langsSkipped"] = langsSkipped,
-            },
-            Log = log,
-        };
+                Phase = "branches",
+                Success = true,
+                Message = $"Branches replaced: {branchesDeleted} deleted and {SeedBranches.Length} inserted. Langs: {langsDeleted} deleted and {SeedLangs.Length} inserted.",
+                Stats =
+                {
+                    ["branchesDeleted"] = branchesDeleted,
+                    ["branchesInserted"] = SeedBranches.Length,
+                    ["langsDeleted"] = langsDeleted,
+                    ["langsInserted"] = SeedLangs.Length,
+                },
+                Log = log,
+            };
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            logger.LogError(ex, "Replacing branches failed; transaction rolled back");
+            throw;
+        }
     }
 }

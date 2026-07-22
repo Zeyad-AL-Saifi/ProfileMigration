@@ -8,6 +8,7 @@ using ProfileMigration.Application.Constants;
 using ProfileMigration.Application.Data;
 using ProfileMigration.Application.Options;
 using ProfileMigration.Application.Profiles;
+using ProfileMigration.Application.Profiles.Commands;
 using ProfileMigration.DAL.Models;
 
 namespace ProfileMigration.Application;
@@ -63,6 +64,7 @@ public static class DependencyInjection
         services.AddScoped<BankMigrationService>();
         services.AddScoped<PartnerMigrationService>();
         services.AddScoped<ContactMigrationService>();
+        services.AddScoped<ResetProfileMigrationDataCommandHandler>();
         services.AddScoped<ClientAnalysisService>();
 
         return services;

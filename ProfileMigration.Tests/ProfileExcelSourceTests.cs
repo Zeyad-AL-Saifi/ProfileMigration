@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Metadata;
 using ProfileMigration.Application.Profiles;
 using ProfileMigration.DAL.Models;
 using Xunit;
+using static ProfileMigration.Application.Excel.ExcelHelpers;
 using static ProfileMigration.Application.Profiles.ProfileExcelSource;
 
 namespace ProfileMigration.Tests;
@@ -119,6 +120,22 @@ public sealed class ProfileExcelSourceTests
         Assert.Equal(1, bindings["ENTRY_SOURCE_ID"].Values[0]);
         Assert.Equal(1, bindings["CUST_STATUS_ID"].Values[0]);
         Assert.DoesNotContain("ACTIVITY_ID", bindings.Keys);
+    }
+
+    [Fact]
+    public void BranchMapping_UsesDefaultOneAndJeninTen()
+    {
+        var branchMap = LoadBranchIdMap();
+
+        Assert.Equal(1, DefaultBranchId);
+        Assert.Equal(1, branchMap[("ACAD", 0)]);
+        Assert.Equal(10, branchMap[("ACAD", 80)]);
+        Assert.Equal(1, branchMap[("ACAD", 100)]);
+        Assert.Equal(1, branchMap[("ACAD", 120)]);
+        Assert.Equal(1, branchMap[("ACAD", 130)]);
+        Assert.Equal(1, branchMap[("ACAD", 200)]);
+        Assert.Equal(1, branchMap[("ASALA", 0)]);
+        Assert.Equal(10, branchMap[("ASALA", 20)]);
     }
 
     static XLWorkbook CreateClientWorkbook()
